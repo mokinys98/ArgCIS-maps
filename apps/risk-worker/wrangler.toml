@@ -1,0 +1,14 @@
+name = "argcis-risk-worker"
+main = "src/index.ts"
+compatibility_date = "2026-03-07"
+
+[triggers]
+crons = ["0 * * * *"]
+
+[vars]
+APP_ORIGIN = "http://127.0.0.1:5173"
+ALLOW_ANON_READ = "true"
+USE_DEMO_DATA = "true"
+H3_RESOLUTION = "7"
+METEO_SOURCE_VIEW = "argcis_ingest_meteo_feed"
+ROAD_SOURCE_VIEW = "argcis_ingest_road_feed"

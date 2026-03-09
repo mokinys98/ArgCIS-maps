@@ -1,0 +1,253 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap");
+
+:root {
+  color-scheme: light;
+  font-family: "IBM Plex Sans", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(19, 78, 74, 0.2), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(217, 119, 6, 0.2), transparent 24%),
+    linear-gradient(135deg, #f4efe6 0%, #dfeaf1 100%);
+  color: #12212d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: transparent;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) 1fr;
+  min-height: 100vh;
+  gap: 1.25rem;
+  padding: 1.25rem;
+}
+
+.sidebar,
+.workspace {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+}
+
+.workspace {
+  grid-template-rows: auto 1fr;
+}
+
+.panel,
+.brand-panel,
+.login-panel {
+  background: rgba(255, 253, 249, 0.78);
+  border: 1px solid rgba(18, 33, 45, 0.08);
+  box-shadow: 0 24px 60px rgba(18, 33, 45, 0.12);
+  backdrop-filter: blur(18px);
+  border-radius: 24px;
+  padding: 1rem 1.1rem;
+}
+
+.brand-panel h1,
+.login-panel h1,
+.panel h2 {
+  margin: 0;
+  font-family: "Space Grotesk", sans-serif;
+  line-height: 1.05;
+}
+
+.brand-panel h1 {
+  font-size: clamp(1.8rem, 2vw, 2.6rem);
+  margin-top: 0.35rem;
+}
+
+.panel h2 {
+  font-size: 1.15rem;
+}
+
+.eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.72rem;
+  color: #0f766e;
+}
+
+.muted,
+.panel small,
+.scenario-card small,
+.activity-card small {
+  color: #4b5563;
+}
+
+.status-row,
+.panel-head,
+.activity-head,
+.timeline-meta,
+.preset-form,
+.layer-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.status-row {
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.status-pill,
+.risk-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: white;
+  background: #12212d;
+}
+
+.panel-head {
+  margin-bottom: 0.8rem;
+}
+
+.layer-list,
+.saved-list,
+.activity-list,
+.scenario-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.layer-card,
+.activity-card,
+.scenario-card {
+  border-radius: 18px;
+  padding: 0.85rem;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(18, 33, 45, 0.08);
+}
+
+.layer-toggle {
+  align-items: flex-start;
+}
+
+.layer-toggle span {
+  display: grid;
+  gap: 0.2rem;
+  flex: 1;
+}
+
+.opacity-field {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.65rem;
+  font-size: 0.84rem;
+}
+
+.preset-form input,
+.login-form input {
+  width: 100%;
+  padding: 0.75rem 0.9rem;
+  border-radius: 14px;
+  border: 1px solid rgba(18, 33, 45, 0.14);
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.saved-item,
+button {
+  border: 0;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #0f766e, #1d4ed8);
+  color: white;
+  padding: 0.78rem 1rem;
+  cursor: pointer;
+  transition: transform 160ms ease, opacity 160ms ease;
+}
+
+.saved-item {
+  text-align: left;
+  display: grid;
+  gap: 0.2rem;
+}
+
+button:hover,
+.saved-item:hover {
+  transform: translateY(-1px);
+}
+
+.timeline-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.timeline-panel::after {
+  content: "";
+  position: absolute;
+  inset: auto -10% -35% auto;
+  width: 260px;
+  height: 260px;
+  border-radius: 999px;
+  background: rgba(14, 116, 144, 0.12);
+  filter: blur(22px);
+}
+
+.timeline-range {
+  width: 100%;
+  accent-color: #0f766e;
+}
+
+.map-canvas {
+  min-height: 72vh;
+  border-radius: 28px;
+  overflow: hidden;
+  border: 1px solid rgba(18, 33, 45, 0.08);
+  box-shadow: 0 30px 80px rgba(18, 33, 45, 0.16);
+}
+
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+}
+
+.login-panel {
+  width: min(480px, 100%);
+}
+
+.login-form {
+  display: grid;
+  gap: 0.9rem;
+  margin-top: 1rem;
+}
+
+.login-form label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.error-text {
+  color: #b91c1c;
+  margin: 0.2rem 0 0;
+}
+
+@media (max-width: 1080px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .map-canvas {
+    min-height: 56vh;
+  }
+}
