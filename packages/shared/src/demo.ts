@@ -235,6 +235,7 @@ function buildFrameLayerData(time: string): FrameLayerData[] {
           geometry: activity.geometry!,
           properties: {
             label: activity.name,
+            risk_score: activity.risk_score,
             risk_level: activity.risk_level,
             recommended_action: activity.recommended_action,
             risk_summary: activity.risk_summary

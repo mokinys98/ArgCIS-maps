@@ -21,6 +21,7 @@ export type RecommendedAction =
   | "stabdyti";
 
 export interface RiskSummary {
+  risk_score: number;
   risk_level: RiskLevel;
   risk_reasons: string[];
   recommended_action: RecommendedAction;

@@ -116,6 +116,7 @@ describe("risk engine", () => {
             type: "Point",
             coordinates: [25.2797, 54.6872]
           },
+          risk_score: 45,
           risk_level: "yellow",
           risk_reasons: ["gusiai virs 15 m/s"],
           recommended_action: "vykdyti su ribojimais",

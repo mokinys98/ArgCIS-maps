@@ -85,6 +85,7 @@ create table if not exists risk_hex_cells (
   geometry jsonb not null,
   center_lng double precision not null,
   center_lat double precision not null,
+  risk_score integer not null default 0,
   risk_level text not null check (risk_level in ('green', 'yellow', 'red')),
   risk_reasons jsonb not null default '[]'::jsonb,
   recommended_action text not null,

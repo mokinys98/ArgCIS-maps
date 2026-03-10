@@ -213,6 +213,7 @@ export function buildFrameResponse(
       geometry: activity.geometry!,
       properties: {
         label: activity.name,
+        risk_score: activity.risk_score,
         activity_type: activity.activity_type,
         risk_level: activity.risk_level,
         risk_summary: activity.risk_summary,
@@ -269,6 +270,7 @@ export function attachRiskToActivities(
     const summary: RiskSummary =
       matched ??
       ({
+        risk_score: 0,
         risk_level: "green",
         risk_reasons: [],
         recommended_action: "vykdyti",

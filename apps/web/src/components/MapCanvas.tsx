@@ -1,5 +1,5 @@
 import type { PickingInfo } from "@deck.gl/core";
-import { GeoJsonLayer, IconLayer } from "@deck.gl/layers";
+import { GeoJsonLayer, IconLayer, TextLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import type {
   FrameLayerData,
@@ -140,7 +140,7 @@ function buildOverlayLayers({
   layerMap: Map<string, LayerDefinition>;
   zoom: number;
 }) {
-  const deckLayers: Array<GeoJsonLayer | IconLayer<PointMarker>> = [];
+  const deckLayers: Array<GeoJsonLayer | IconLayer<PointMarker> | TextLayer<RiskLabel>> = [];
   const shouldRenderFillZonesOnly = !isCenterInLithuania(map.getCenter());
 
   for (const layer of layers) {
@@ -162,6 +162,7 @@ function buildOverlayLayers({
               id: cell.h3_index,
               geometry: cell.geometry,
               properties: {
+                risk_score: cell.risk_score,
                 risk_level: cell.risk_level,
                 recommended_action: cell.recommended_action,
                 risk_summary: cell.risk_summary,
@@ -185,6 +186,29 @@ function buildOverlayLayers({
           onClick: (info: PickingInfo) => showPopup(map, info)
         })
       );
+      if (zoom >= 6) {
+        deckLayers.push(
+          new TextLayer<RiskLabel>({
+            id: "risk-hex-score-labels",
+            data: riskCells.map((cell) => ({
+              position: cell.center,
+              text: String(cell.risk_score),
+              riskLevel: cell.risk_level
+            })),
+            pickable: false,
+            getPosition: (item) => item.position,
+            getText: (item) => item.text,
+            getSize: getRiskScoreTextSize(zoom),
+            sizeUnits: "pixels",
+            getColor: (item) =>
+              item.riskLevel === "yellow" ? [15, 23, 42, 255] : [255, 255, 255, 245],
+            getTextAnchor: "middle",
+            getAlignmentBaseline: "center",
+            fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
+            fontWeight: 800
+          })
+        );
+      }
       continue;
     }
 
@@ -311,6 +335,11 @@ function getDynamicHexOutlineWidth(zoom: number, isGridOutline: boolean): number
   return baseWidth + zoomInBoost + zoomOutBoost;
 }
 
+function getRiskScoreTextSize(zoom: number): number {
+  const clampedZoom = Math.max(6, Math.min(12, zoom));
+  return 11 + (clampedZoom - 6) * 1.2;
+}
+
 interface PointMarker {
   id: string;
   coordinates: [number, number];
@@ -321,6 +350,12 @@ interface PointMarker {
     height: number;
     anchorY: number;
   };
+}
+
+interface RiskLabel {
+  position: [number, number];
+  text: string;
+  riskLevel: "green" | "yellow" | "red";
 }
 
 const METEO_ICON = {
@@ -435,9 +470,22 @@ function showPopup(map: maplibregl.Map, info: PickingInfo) {
 
   const properties = (info.object as { properties?: Record<string, unknown> }).properties ?? {};
   const title =
-    String(properties.label ?? properties.alert_name ?? properties.risk_level ?? "Objektas");
+    String(
+      properties.label ??
+        properties.alert_name ??
+        (properties.risk_score !== undefined
+          ? `Score ${properties.risk_score}`
+          : properties.risk_level) ??
+        "Objektas"
+    );
   const body =
-    String(properties.risk_summary ?? properties.surface_state ?? properties.alert_code ?? "");
+    String(
+      properties.risk_summary ??
+        (properties.risk_score !== undefined
+          ? `Risk score: ${properties.risk_score}`
+          : properties.surface_state ?? properties.alert_code) ??
+        ""
+    );
   const action = String(properties.recommended_action ?? "");
 
   new maplibregl.Popup({ offset: 12 })

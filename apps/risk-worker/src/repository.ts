@@ -131,7 +131,7 @@ export class ArgcisRepository {
     const { data, error } = await this.client
       .from("risk_hex_cells")
       .select(
-        "h3_index, forecast_time_utc, geometry, center_lng, center_lat, risk_level, risk_reasons, recommended_action, summary, raw_metrics"
+        "h3_index, forecast_time_utc, geometry, center_lng, center_lat, risk_score, risk_level, risk_reasons, recommended_action, summary, raw_metrics"
       )
       .eq("forecast_time_utc", time);
 
@@ -146,6 +146,7 @@ export class ArgcisRepository {
       center: [row.center_lng as number, row.center_lat as number],
       center_lng: row.center_lng as number,
       center_lat: row.center_lat as number,
+      risk_score: row.risk_score as number,
       risk_level: row.risk_level as RiskHexCellRow["risk_level"],
       risk_reasons: (row.risk_reasons as string[]) ?? [],
       recommended_action: row.recommended_action as RiskHexCellRow["recommended_action"],
@@ -248,8 +249,9 @@ export class ArgcisRepository {
         starts_at: input.starts_at,
         ends_at: input.ends_at,
         geometry: null,
-        risk_level: "green",
-        risk_reasons: [],
+          risk_level: "green",
+          risk_score: 0,
+          risk_reasons: [],
         recommended_action: "vykdyti",
         risk_summary: "Demo veikla sukurta be server-side iraso."
       };
@@ -276,6 +278,7 @@ export class ArgcisRepository {
       ...data,
       geometry: null,
       risk_level: "green",
+      risk_score: 0,
       risk_reasons: [],
       recommended_action: "vykdyti",
       risk_summary: "Rizika bus priskirta pagal pasirinkta laika."
@@ -690,7 +693,7 @@ export class ArgcisRepository {
     const { data: cells, error: cellError } = await this.client
       .from("risk_hex_cells")
       .select(
-        "h3_index, forecast_time_utc, geometry, center_lng, center_lat, risk_level, risk_reasons, recommended_action, summary, raw_metrics"
+        "h3_index, forecast_time_utc, geometry, center_lng, center_lat, risk_score, risk_level, risk_reasons, recommended_action, summary, raw_metrics"
       )
       .eq("forecast_time_utc", time);
 
@@ -705,6 +708,7 @@ export class ArgcisRepository {
       center: [row.center_lng as number, row.center_lat as number],
       center_lng: row.center_lng as number,
       center_lat: row.center_lat as number,
+      risk_score: row.risk_score as number,
       risk_level: row.risk_level as RiskHexCellRow["risk_level"],
       risk_reasons: (row.risk_reasons as string[]) ?? [],
       recommended_action: row.recommended_action as RiskHexCellRow["recommended_action"],
@@ -792,6 +796,7 @@ export class ArgcisRepository {
       geometry: row.geometry,
       center_lng: row.center_lng,
       center_lat: row.center_lat,
+      risk_score: row.risk_score,
       risk_level: row.risk_level,
       risk_reasons: row.risk_reasons,
       recommended_action: row.recommended_action,

@@ -5,17 +5,11 @@ import type {
   RiskSummary
 } from "./types";
 
-const RISK_WEIGHT: Record<RiskLevel, number> = {
-  green: 0,
-  yellow: 1,
-  red: 2
-};
-
 const HEX_AGGREGATION_THRESHOLDS = {
-  redRatio: 0.45,
-  yellowRatio: 0.35,
-  minRedCount: 2,
-  minYellowCount: 2
+  redThresholdScore: 70,
+  yellowThresholdScore: 35,
+  yellowWeight: 40,
+  maxPointScoreWeight: 0.1
 } as const;
 
 export interface ThresholdConfig {
@@ -38,6 +32,18 @@ export const DEFAULT_THRESHOLDS: ThresholdConfig = {
   yellowPrecipitationMm: 10
 };
 
+export function deriveRiskLevelFromScore(score: number): RiskLevel {
+  if (score >= HEX_AGGREGATION_THRESHOLDS.redThresholdScore) {
+    return "red";
+  }
+
+  if (score >= HEX_AGGREGATION_THRESHOLDS.yellowThresholdScore) {
+    return "yellow";
+  }
+
+  return "green";
+}
+
 function pushReason(target: string[], reason: string): void {
   if (!target.includes(reason)) {
     target.push(reason);
@@ -49,24 +55,24 @@ export function evaluateRisk(
   thresholds: ThresholdConfig = DEFAULT_THRESHOLDS
 ): RiskSummary {
   const reasons: string[] = [];
-  let level: RiskLevel = "green";
+  let score = 0;
 
   if ((metrics.thunder_probability ?? 0) >= thresholds.redThunderProbability) {
     pushReason(reasons, "perkunija");
-    level = "red";
+    score = Math.max(score, 85);
   } else if (
     (metrics.thunder_probability ?? 0) >= thresholds.yellowThunderProbability
   ) {
     pushReason(reasons, "perkunijos tikimybe");
-    level = escalate(level, "yellow");
+    score = Math.max(score, 45);
   }
 
   if ((metrics.wind_gust_ms ?? 0) >= thresholds.redWindGustMs) {
     pushReason(reasons, `gusiai virs ${thresholds.redWindGustMs} m/s`);
-    level = "red";
+    score = Math.max(score, 80);
   } else if ((metrics.wind_gust_ms ?? 0) >= thresholds.yellowWindGustMs) {
     pushReason(reasons, `gusiai virs ${thresholds.yellowWindGustMs} m/s`);
-    level = escalate(level, "yellow");
+    score = Math.max(score, 45);
   }
 
   if (
@@ -74,37 +80,39 @@ export function evaluateRisk(
     metrics.visibility_m <= thresholds.redVisibilityM
   ) {
     pushReason(reasons, "rukas");
-    level = "red";
+    score = Math.max(score, 90);
   } else if (
     metrics.visibility_m !== undefined &&
     metrics.visibility_m <= thresholds.yellowVisibilityM
   ) {
     pushReason(reasons, "sumazejas matomumas");
-    level = escalate(level, "yellow");
+    score = Math.max(score, 40);
   }
 
   if (metrics.road_ice || metrics.surface_state === "ice") {
     pushReason(reasons, "kelio danga apledejusi");
-    level = "red";
+    score = Math.max(score, 95);
   }
 
   if (metrics.road_restriction) {
     pushReason(reasons, "eismo apribojimas");
-    level = "red";
+    score = Math.max(score, 90);
   }
 
   if ((metrics.precipitation_mm ?? 0) >= thresholds.yellowPrecipitationMm) {
     pushReason(reasons, "stiprus krituliai");
-    level = escalate(level, "yellow");
+    score = Math.max(score, 35);
   }
 
+  const level = deriveRiskLevelFromScore(score);
   const recommended_action = chooseAction(level, reasons);
   const risk_summary =
     reasons.length === 0
       ? "Rizika zema, ribojimu nera."
-      : `Rizika ${level}: ${reasons.join(", ")}.`;
+      : `Rizika ${level} (${score}): ${reasons.join(", ")}.`;
 
   return {
+    risk_score: score,
     risk_level: level,
     risk_reasons: reasons,
     recommended_action,
@@ -115,6 +123,7 @@ export function evaluateRisk(
 export function aggregateRiskSummaries(items: RiskSummary[]): RiskSummary {
   if (items.length === 0) {
     return {
+      risk_score: 0,
       risk_level: "green",
       risk_reasons: [],
       recommended_action: "vykdyti",
@@ -129,26 +138,25 @@ export function aggregateRiskSummaries(items: RiskSummary[]): RiskSummary {
   const redItems = items.filter((item) => item.risk_level === "red");
   const yellowItems = items.filter((item) => item.risk_level === "yellow");
   const yellowOrRedItems = [...redItems, ...yellowItems];
-
-  const redThreshold = Math.max(
-    HEX_AGGREGATION_THRESHOLDS.minRedCount,
-    Math.ceil(items.length * HEX_AGGREGATION_THRESHOLDS.redRatio)
+  const redShare = redItems.length / items.length;
+  const yellowShare = yellowItems.length / items.length;
+  const maxPointScore = Math.max(...items.map((item) => item.risk_score));
+  const aggregateScore = Math.min(
+    100,
+    Math.round(
+      redShare * 100 +
+        yellowShare * HEX_AGGREGATION_THRESHOLDS.yellowWeight +
+        maxPointScore * HEX_AGGREGATION_THRESHOLDS.maxPointScoreWeight
+    )
   );
-  const yellowThreshold = Math.max(
-    HEX_AGGREGATION_THRESHOLDS.minYellowCount,
-    Math.ceil(items.length * HEX_AGGREGATION_THRESHOLDS.yellowRatio)
-  );
 
-  let aggregateLevel: RiskLevel = "green";
-  let contributingItems: RiskSummary[] = [];
-
-  if (redItems.length >= redThreshold) {
-    aggregateLevel = "red";
-    contributingItems = redItems;
-  } else if (yellowOrRedItems.length >= yellowThreshold) {
-    aggregateLevel = "yellow";
-    contributingItems = yellowOrRedItems;
-  }
+  const aggregateLevel = deriveRiskLevelFromScore(aggregateScore);
+  const contributingItems =
+    aggregateLevel === "red"
+      ? redItems
+      : aggregateLevel === "yellow"
+        ? yellowOrRedItems
+        : [];
 
   const combinedReasons =
     aggregateLevel === "green"
@@ -158,13 +166,14 @@ export function aggregateRiskSummaries(items: RiskSummary[]): RiskSummary {
         );
 
   return {
+    risk_score: aggregateScore,
     risk_level: aggregateLevel,
     risk_reasons: combinedReasons,
     recommended_action: chooseAction(aggregateLevel, combinedReasons),
     risk_summary:
       combinedReasons.length === 0
         ? "Rizikos signalu nerasta."
-        : `Bendra rizika ${aggregateLevel}: ${combinedReasons.join(", ")}.`
+        : `Bendra rizika ${aggregateLevel} (${aggregateScore}): ${combinedReasons.join(", ")}.`
   };
 }
 
@@ -177,10 +186,6 @@ export function riskColor(level: RiskLevel): string {
     case "red":
       return "#e03131";
   }
-}
-
-function escalate(current: RiskLevel, incoming: RiskLevel): RiskLevel {
-  return RISK_WEIGHT[incoming] > RISK_WEIGHT[current] ? incoming : current;
 }
 
 function chooseAction(
