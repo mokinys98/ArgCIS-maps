@@ -23,6 +23,7 @@ import {
   buildHexResponse,
   buildSyntheticArtifacts,
   buildTimeline,
+  expandSignalWindow,
   type ExerciseActivityRow,
   type ForecastFrameRow,
   type RiskHexCellRow
@@ -69,6 +70,8 @@ interface ExerciseGeometryRow {
   centroid_lat: number | null;
   h3_index: string | null;
 }
+
+const ROAD_POINT_LOOKBACK_HOURS = 12;
 
 export class ArgcisRepository {
   private readonly client: SupabaseClient;
@@ -445,7 +448,8 @@ export class ArgcisRepository {
     const artifacts = buildSyntheticArtifacts(
       sourceSignals,
       nowIso,
-      this.config.h3Resolution
+      this.config.h3Resolution,
+      timeline
     );
 
     await this.deleteSyntheticWindow(start, end);
@@ -465,24 +469,26 @@ export class ArgcisRepository {
     start: string,
     end: string
   ): Promise<RawSignalRecord[]> {
-    const [meteoRows, roadRows] = await Promise.all([
+    const { fetchStartIso, fetchEndIso } = expandSignalWindow(start, end);
+    const [meteoRows, roadRows, roadAlertRows] = await Promise.all([
       this.fetchSignalView(
         this.config.meteoSourceView,
         "meteo",
         "meteo-forecast-points",
-        start,
-        end
+        fetchStartIso,
+        fetchEndIso
       ),
       this.fetchSignalView(
         this.config.roadSourceView,
         "road",
         "road-weather-points",
-        start,
-        end
-      )
+        fetchStartIso,
+        fetchEndIso
+      ),
+      this.fetchRoadAlertSignals(fetchStartIso, fetchEndIso)
     ]);
 
-    return [...meteoRows, ...roadRows];
+    return [...meteoRows, ...roadRows, ...roadAlertRows];
   }
 
   private async fetchSignalView(
@@ -552,7 +558,57 @@ export class ArgcisRepository {
       throw error;
     }
 
-    return (data ?? []) as ForecastFrameRow[];
+    const exactRows = (data ?? []) as ForecastFrameRow[];
+    const shouldIncludeRoadLayer =
+      layerIds.length === 0 || layerIds.includes("road-weather-points");
+
+    if (!shouldIncludeRoadLayer) {
+      return exactRows;
+    }
+
+    const latestRoadRows = await this.listLatestRoadRowsByStation(time);
+    if (latestRoadRows.length === 0) {
+      return exactRows;
+    }
+
+    const rowsWithoutRoad = exactRows.filter(
+      (row) => row.layer_id !== "road-weather-points"
+    );
+
+    return [...rowsWithoutRoad, ...latestRoadRows];
+  }
+
+  private async listLatestRoadRowsByStation(time: string): Promise<ForecastFrameRow[]> {
+    const selectedTime = new Date(time);
+    const lookbackStart = new Date(
+      selectedTime.getTime() - ROAD_POINT_LOOKBACK_HOURS * 60 * 60 * 1000
+    ).toISOString();
+
+    const { data, error } = await this.client
+      .from("forecast_frames_raw")
+      .select(
+        "source_id, source, layer_id, forecast_time_utc, location_name, latitude, longitude, h3_index, geometry, metrics"
+      )
+      .eq("layer_id", "road-weather-points")
+      .gte("forecast_time_utc", lookbackStart)
+      .lte("forecast_time_utc", selectedTime.toISOString())
+      .order("forecast_time_utc", { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    const rows = (data ?? []) as ForecastFrameRow[];
+    const perStation = new Map<string, ForecastFrameRow>();
+
+    for (const row of rows) {
+      const stationKey = row.source_id.split(":")[0] ?? row.source_id;
+      if (!perStation.has(stationKey)) {
+        perStation.set(stationKey, row);
+      }
+    }
+
+    return Array.from(perStation.values());
   }
 
   private async listExerciseAreas(): Promise<GeoJsonFeatureCollection> {
@@ -747,6 +803,92 @@ export class ArgcisRepository {
     if (error) {
       throw error;
     }
+  }
+
+  private async fetchRoadAlertSignals(
+    start: string,
+    end: string
+  ): Promise<RawSignalRecord[]> {
+    const { data, error } = await this.client
+      .from("road_weather_alerts")
+      .select("station_id, collected_at_utc, code, name")
+      .gte("collected_at_utc", start)
+      .lte("collected_at_utc", end)
+      .order("collected_at_utc", { ascending: true });
+
+    if (error) {
+      throw error;
+    }
+
+    const alerts = (data ?? []) as Array<{
+      station_id: number;
+      collected_at_utc: string;
+      code: string;
+      name: string;
+    }>;
+
+    if (alerts.length === 0) {
+      return [];
+    }
+
+    const stationIds = Array.from(new Set(alerts.map((alert) => alert.station_id)));
+    const { data: stations, error: stationError } = await this.client
+      .from("road_weather_stations")
+      .select("id, lat, lon, device_name, road_number, road_name")
+      .in("id", stationIds);
+
+    if (stationError) {
+      throw stationError;
+    }
+
+    const stationMap = new Map<number, {
+      id: number;
+      lat: number | null;
+      lon: number | null;
+      device_name: string | null;
+      road_number: string | null;
+      road_name: string | null;
+    }>();
+
+    for (const station of (stations ?? []) as Array<{
+      id: number;
+      lat: number | null;
+      lon: number | null;
+      device_name: string | null;
+      road_number: string | null;
+      road_name: string | null;
+    }>) {
+      stationMap.set(station.id, station);
+    }
+
+    const mappedAlerts: Array<RawSignalRecord | null> = alerts.map((alert) => {
+        const station = stationMap.get(alert.station_id);
+        if (!station || station.lat === null || station.lon === null) {
+          return null;
+        }
+
+        return {
+          id: `${alert.station_id}:${alert.collected_at_utc}:${alert.code}`,
+          source: "road" as const,
+          layer_id: "road-alerts",
+          forecast_time_utc: alert.collected_at_utc,
+          latitude: station.lat,
+          longitude: station.lon,
+          location_name:
+            station.device_name ||
+            [station.road_number, station.road_name].filter(Boolean).join(" ") ||
+            `Road station ${alert.station_id}`,
+          metrics: {
+            road_restriction: true,
+            alert_code: alert.code,
+            alert_name: alert.name
+          }
+        } satisfies RawSignalRecord;
+      });
+
+    return mappedAlerts.filter(
+      (value): value is RawSignalRecord => value !== null
+    );
   }
 }
 

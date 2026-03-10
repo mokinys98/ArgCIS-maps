@@ -10,10 +10,12 @@
     "build": "npm run build --workspaces --if-present",
     "dev:web": "npm run dev --workspace @argcis/web",
     "dev:worker": "npm run dev --workspace @argcis/risk-worker",
+    "dev": "concurrently \"npm run dev:web\" \"npm run dev:worker\"",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {
+    "concurrently": "^7.6.0",
     "typescript": "^5.8.0",
     "vitest": "^3.0.0"
   }

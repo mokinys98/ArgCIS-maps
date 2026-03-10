@@ -29,7 +29,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const response = await fetch(`${baseUrl}${path}`, {
     method: options.method ?? "GET",
     headers: {
-      "content-type": "application/json",
+      ...(options.body ? { "content-type": "application/json" } : {}),
       ...(options.token ? { authorization: `Bearer ${options.token}` } : {})
     },
     body: options.body ? JSON.stringify(options.body) : undefined

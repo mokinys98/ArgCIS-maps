@@ -2,7 +2,6 @@ import type { LayerDefinition, SavedMap } from "@argcis/shared";
 
 export interface LayerState {
   visible: boolean;
-  opacity: number;
 }
 
 interface LayerPanelProps {
@@ -12,7 +11,6 @@ interface LayerPanelProps {
   draftName: string;
   onDraftNameChange(value: string): void;
   onToggle(layerId: string): void;
-  onOpacity(layerId: string, value: number): void;
   onSavePreset(): void;
   onApplySavedMap(savedMap: SavedMap): void;
 }
@@ -24,7 +22,6 @@ export function LayerPanel({
   draftName,
   onDraftNameChange,
   onToggle,
-  onOpacity,
   onSavePreset,
   onApplySavedMap
 }: LayerPanelProps) {
@@ -52,19 +49,6 @@ export function LayerPanel({
                   <strong>{layer.name}</strong>
                   <small>{layer.description}</small>
                 </span>
-              </label>
-              <label className="opacity-field">
-                Opacity {(current?.opacity ?? 0).toFixed(2)}
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={current?.opacity ?? layer.default_opacity}
-                  onChange={(event) =>
-                    onOpacity(layer.id, Number(event.target.value))
-                  }
-                />
               </label>
             </article>
           );

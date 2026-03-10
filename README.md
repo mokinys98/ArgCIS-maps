@@ -34,8 +34,8 @@ supabase/
 
 - interaktyvus MapLibre zemelapis su deck.gl overlay
 - layer katalogas baziniams ir calculated sluoksniams
-- 7 dienu forecast animacija valandiniu zingsniu
-- H3 resolution 7 risk layer su paaiskinimais
+- 7 dienu forecast animacija 3 valandu segmentais
+- H3 resolution 6 risk layer su paaiskinimais
 - pratybu veiklu overlay ir risk suvestines
 - issaugomi vartotojo layer preset'ai
 - Supabase Auth vidiniams vartotojams
@@ -50,7 +50,7 @@ supabase/
 - `APP_ORIGIN`
 - `ALLOW_ANON_READ` - `true` tik lokaliam demo naudojimui
 - `USE_DEMO_DATA` - `true`, jei ingest saltiniai dar nesujungti
-- `H3_RESOLUTION` - default `7`
+- `H3_RESOLUTION` - default `6`
 
 Papildomai galima nurodyti view pavadinimus, is kuriu workeris skaitys ingest duomenis:
 
@@ -62,7 +62,7 @@ Papildomai galima nurodyti view pavadinimus, is kuriu workeris skaitys ingest du
 - `VITE_API_BASE_URL`
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
-- `VITE_MAP_STYLE_URL` - default `https://demotiles.maplibre.org/style.json`
+- `VITE_OSM_TILE_URL` - default `https://tile.openstreetmap.org/{z}/{x}/{y}.png`
 - `VITE_DEMO_MODE` - `true`, jei reikia dirbti be auth ir be realaus API
 
 ## Paleidimas

@@ -7,6 +7,8 @@ interface ActivityPanelProps {
 }
 
 export function ActivityPanel({ scenarios, activities }: ActivityPanelProps) {
+  const isEmpty = scenarios.length === 0 && activities.length === 0;
+
   return (
     <section className="panel">
       <div className="panel-head">
@@ -15,6 +17,12 @@ export function ActivityPanel({ scenarios, activities }: ActivityPanelProps) {
           <h2>Scenarijai ir veiklos</h2>
         </div>
       </div>
+
+      {isEmpty ? (
+        <p className="empty-state">
+          Pratybu geometriju ir veiklu siuo metu nera.
+        </p>
+      ) : null}
 
       <div className="scenario-list">
         {scenarios.map((scenario) => (

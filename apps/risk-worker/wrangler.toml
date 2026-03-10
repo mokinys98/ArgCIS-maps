@@ -9,6 +9,6 @@ crons = ["0 * * * *"]
 APP_ORIGIN = "http://127.0.0.1:5173"
 ALLOW_ANON_READ = "true"
 USE_DEMO_DATA = "true"
-H3_RESOLUTION = "7"
+H3_RESOLUTION = "5"
 METEO_SOURCE_VIEW = "argcis_ingest_meteo_feed"
 ROAD_SOURCE_VIEW = "argcis_ingest_road_feed"

@@ -2,6 +2,10 @@ import {
   LAYER_CATALOG
 } from "./layers";
 import { aggregateRiskSummaries, evaluateRisk } from "./risk";
+import {
+  buildForecastTimeline,
+  FORECAST_SEGMENT_HOURS
+} from "./time";
 import type {
   ExerciseActivity,
   ExerciseGeometry,
@@ -12,14 +16,16 @@ import type {
   MapFrameResponse,
   MapHexResponse,
   RawSignalMetrics,
+  H3OutlineCell,
   RiskHexCell
 } from "./types";
 
-const TIMELINE_HOURS = 7 * 24;
 const START = new Date("2026-03-07T00:00:00.000Z");
 
-function atHour(offset: number): string {
-  return new Date(START.getTime() + offset * 60 * 60 * 1000).toISOString();
+function atSegment(offset: number): string {
+  return new Date(
+    START.getTime() + offset * FORECAST_SEGMENT_HOURS * 60 * 60 * 1000
+  ).toISOString();
 }
 
 function makeHexagon(
@@ -74,7 +80,7 @@ function buildMetrics(hourOffset: number, variant: number): RawSignalMetrics {
 }
 
 export function demoTimeline(): string[] {
-  return Array.from({ length: TIMELINE_HOURS }, (_, index) => atHour(index));
+  return buildForecastTimeline(START.toISOString());
 }
 
 export function demoLayerCatalog(): LayerCatalogResponse {
@@ -134,8 +140,9 @@ export function demoGeometries(): ExerciseGeometry[] {
 }
 
 function buildFrameLayerData(time: string): FrameLayerData[] {
-  const hourOffset = Math.floor(
-    (new Date(time).getTime() - START.getTime()) / (60 * 60 * 1000)
+  const segmentOffset = Math.floor(
+    (new Date(time).getTime() - START.getTime()) /
+      (FORECAST_SEGMENT_HOURS * 60 * 60 * 1000)
   );
 
   const meteoPoints: GeoJsonFeatureCollection = {
@@ -143,13 +150,13 @@ function buildFrameLayerData(time: string): FrameLayerData[] {
     features: [
       makePointFeature("meteo-1", [25.2797, 54.6872], {
         label: "Vilnius",
-        temperature: 4 + (hourOffset % 4),
-        wind_gust_ms: 11 + (hourOffset % 6)
+        temperature: 4 + (segmentOffset % 4),
+        wind_gust_ms: 11 + (segmentOffset % 6)
       }),
       makePointFeature("meteo-2", [23.8813, 54.8985], {
         label: "Kaunas",
-        temperature: 3 + (hourOffset % 3),
-        wind_gust_ms: 13 + (hourOffset % 5)
+        temperature: 3 + (segmentOffset % 3),
+        wind_gust_ms: 13 + (segmentOffset % 5)
       })
     ]
   };
@@ -159,13 +166,13 @@ function buildFrameLayerData(time: string): FrameLayerData[] {
     features: [
       makePointFeature("road-1", [25.0, 54.71], {
         label: "A1 ruozo stotis",
-        road_ice: hourOffset % 9 === 0,
-        restriction: hourOffset % 7 === 0
+        road_ice: segmentOffset % 3 === 0,
+        restriction: segmentOffset % 5 === 0
       }),
       makePointFeature("road-2", [24.4, 55.05], {
         label: "Panevezio kryptis",
         road_ice: false,
-        restriction: hourOffset % 11 === 0
+        restriction: segmentOffset % 4 === 0
       })
     ]
   };
@@ -173,7 +180,7 @@ function buildFrameLayerData(time: string): FrameLayerData[] {
   const alertPoints: GeoJsonFeatureCollection = {
     type: "FeatureCollection",
     features:
-      hourOffset % 5 === 0
+      segmentOffset % 2 === 0
         ? [
             makePointFeature("alert-1", [24.95, 54.73], {
               label: "Eismo apribojimas",
@@ -216,6 +223,24 @@ function buildFrameLayerData(time: string): FrameLayerData[] {
       layer_id: "exercise-areas",
       layer_name: "Pratybu geometrijos",
       feature_collection: exerciseAreas
+    },
+    {
+      layer_id: "activity-risk",
+      layer_name: "Veiklu risk suvestine",
+      feature_collection: {
+        type: "FeatureCollection",
+        features: demoActivities(time).map((activity) => ({
+          type: "Feature",
+          id: activity.id,
+          geometry: activity.geometry!,
+          properties: {
+            label: activity.name,
+            risk_level: activity.risk_level,
+            recommended_action: activity.recommended_action,
+            risk_summary: activity.risk_summary
+          }
+        }))
+      }
     }
   ];
 }
@@ -230,8 +255,9 @@ export function demoFrame(time: string): MapFrameResponse {
 }
 
 export function demoHex(time: string): MapHexResponse {
-  const hourOffset = Math.floor(
-    (new Date(time).getTime() - START.getTime()) / (60 * 60 * 1000)
+  const segmentOffset = Math.floor(
+    (new Date(time).getTime() - START.getTime()) /
+      (FORECAST_SEGMENT_HOURS * 60 * 60 * 1000)
   );
 
   const cells: RiskHexCell[] = [
@@ -240,32 +266,40 @@ export function demoHex(time: string): MapHexResponse {
       forecast_time_utc: time,
       geometry: makeHexagon(25.14, 54.71),
       center: [25.14, 54.71],
-      raw_metrics: buildMetrics(hourOffset, 1),
-      ...evaluateRisk(buildMetrics(hourOffset, 1))
+      raw_metrics: buildMetrics(segmentOffset, 1),
+      ...evaluateRisk(buildMetrics(segmentOffset, 1))
     },
     {
       h3_index: "demo-hex-2",
       forecast_time_utc: time,
       geometry: makeHexagon(24.78, 54.85),
       center: [24.78, 54.85],
-      raw_metrics: buildMetrics(hourOffset, 2),
-      ...evaluateRisk(buildMetrics(hourOffset, 2))
+      raw_metrics: buildMetrics(segmentOffset, 2),
+      ...evaluateRisk(buildMetrics(segmentOffset, 2))
     },
     {
       h3_index: "demo-hex-3",
       forecast_time_utc: time,
       geometry: makeHexagon(25.48, 54.88),
       center: [25.48, 54.88],
-      raw_metrics: buildMetrics(hourOffset, 3),
+      raw_metrics: buildMetrics(segmentOffset, 3),
       ...aggregateRiskSummaries([
-        evaluateRisk(buildMetrics(hourOffset, 3)),
-        evaluateRisk({ road_restriction: hourOffset % 7 === 0 })
+        evaluateRisk(buildMetrics(segmentOffset, 3)),
+        evaluateRisk({ road_restriction: segmentOffset % 4 === 0 })
       ])
     }
   ];
 
+  const outline_cells: H3OutlineCell[] = cells.map((cell) => ({
+    h3_index: cell.h3_index,
+    forecast_time_utc: cell.forecast_time_utc,
+    geometry: cell.geometry,
+    center: cell.center
+  }));
+
   return {
     time,
-    cells
+    cells,
+    outline_cells
   };
 }

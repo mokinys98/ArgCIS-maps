@@ -1,3 +1,5 @@
+import { floorToForecastSegment } from "@argcis/shared";
+
 export interface Env {
   SUPABASE_URL?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
@@ -30,7 +32,7 @@ export function getConfig(env: Env): AppConfig {
     appOrigin: env.APP_ORIGIN ?? "*",
     allowAnonRead: toBool(env.ALLOW_ANON_READ, false),
     useDemoData: toBool(env.USE_DEMO_DATA, false),
-    h3Resolution: Number.parseInt(env.H3_RESOLUTION ?? "7", 10),
+    h3Resolution: Number.parseInt(env.H3_RESOLUTION ?? "6", 10),
     meteoSourceView: env.METEO_SOURCE_VIEW ?? "argcis_ingest_meteo_feed",
     roadSourceView: env.ROAD_SOURCE_VIEW ?? "argcis_ingest_road_feed"
   };
@@ -60,7 +62,5 @@ export function requireSupabase(config: AppConfig): void {
 }
 
 export function floorToHour(date: Date): string {
-  const next = new Date(date);
-  next.setUTCMinutes(0, 0, 0);
-  return next.toISOString();
+  return floorToForecastSegment(date);
 }

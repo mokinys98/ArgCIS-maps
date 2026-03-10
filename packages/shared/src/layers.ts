@@ -14,7 +14,7 @@ export const LAYER_CATALOG: LayerDefinition[] = [
   {
     id: "road-weather-points",
     name: "Keliu oro taskai",
-    description: "Momentines ir forecast keliu salygos.",
+    description: "Momentines keliu salygos pagal artimiausia 3 val. segmenta.",
     kind: "raw",
     render_type: "circle",
     default_visible: true,
@@ -60,5 +60,15 @@ export const LAYER_CATALOG: LayerDefinition[] = [
     default_visible: true,
     default_opacity: 0.45,
     color_hint: "#8b5cf6"
+  },
+  {
+    id: "h3-grid-outline",
+    name: "H3 konturai",
+    description: "Tusciu H3 celiu konturai be uzpildo.",
+    kind: "calculated",
+    render_type: "hex-outline",
+    default_visible: false,
+    default_opacity: 1,
+    color_hint: "#0f172a"
   }
 ];

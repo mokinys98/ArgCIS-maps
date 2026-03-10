@@ -11,6 +11,13 @@ const RISK_WEIGHT: Record<RiskLevel, number> = {
   red: 2
 };
 
+const HEX_AGGREGATION_THRESHOLDS = {
+  redRatio: 0.45,
+  yellowRatio: 0.35,
+  minRedCount: 2,
+  minYellowCount: 2
+} as const;
+
 export interface ThresholdConfig {
   yellowWindGustMs: number;
   redWindGustMs: number;
@@ -115,25 +122,49 @@ export function aggregateRiskSummaries(items: RiskSummary[]): RiskSummary {
     };
   }
 
-  const combinedReasons = Array.from(
-    new Set(items.flatMap((item) => item.risk_reasons))
+  if (items.length === 1) {
+    return items[0]!;
+  }
+
+  const redItems = items.filter((item) => item.risk_level === "red");
+  const yellowItems = items.filter((item) => item.risk_level === "yellow");
+  const yellowOrRedItems = [...redItems, ...yellowItems];
+
+  const redThreshold = Math.max(
+    HEX_AGGREGATION_THRESHOLDS.minRedCount,
+    Math.ceil(items.length * HEX_AGGREGATION_THRESHOLDS.redRatio)
   );
-  const maxLevel = items.reduce<RiskLevel>(
-    (current, item) =>
-      RISK_WEIGHT[item.risk_level] > RISK_WEIGHT[current]
-        ? item.risk_level
-        : current,
-    "green"
+  const yellowThreshold = Math.max(
+    HEX_AGGREGATION_THRESHOLDS.minYellowCount,
+    Math.ceil(items.length * HEX_AGGREGATION_THRESHOLDS.yellowRatio)
   );
 
+  let aggregateLevel: RiskLevel = "green";
+  let contributingItems: RiskSummary[] = [];
+
+  if (redItems.length >= redThreshold) {
+    aggregateLevel = "red";
+    contributingItems = redItems;
+  } else if (yellowOrRedItems.length >= yellowThreshold) {
+    aggregateLevel = "yellow";
+    contributingItems = yellowOrRedItems;
+  }
+
+  const combinedReasons =
+    aggregateLevel === "green"
+      ? []
+      : Array.from(
+          new Set(contributingItems.flatMap((item) => item.risk_reasons))
+        );
+
   return {
-    risk_level: maxLevel,
+    risk_level: aggregateLevel,
     risk_reasons: combinedReasons,
-    recommended_action: chooseAction(maxLevel, combinedReasons),
+    recommended_action: chooseAction(aggregateLevel, combinedReasons),
     risk_summary:
       combinedReasons.length === 0
         ? "Rizikos signalu nerasta."
-        : `Bendra rizika ${maxLevel}: ${combinedReasons.join(", ")}.`
+        : `Bendra rizika ${aggregateLevel}: ${combinedReasons.join(", ")}.`
   };
 }
 

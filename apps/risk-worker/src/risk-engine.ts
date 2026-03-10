@@ -1,11 +1,15 @@
 import {
+  FORECAST_SEGMENT_HOURS,
   LAYER_CATALOG,
   aggregateRiskSummaries,
-  evaluateRisk
+  buildForecastTimeline,
+  evaluateRisk,
+  roundToNearestForecastSegment
 } from "@argcis/shared";
 import type {
   BBox,
   ExerciseActivity,
+  H3OutlineCell,
   GeoJsonFeature,
   GeoJsonFeatureCollection,
   JsonObject,
@@ -64,23 +68,31 @@ export interface SyntheticArtifacts {
   riskHexCells: RiskHexCellRow[];
 }
 
-export function buildTimeline(startIso: string, hours = 7 * 24): string[] {
-  const start = new Date(startIso);
-  return Array.from({ length: hours }, (_, index) =>
-    new Date(start.getTime() + index * 60 * 60 * 1000).toISOString()
-  );
+export function buildTimeline(startIso: string): string[] {
+  return buildForecastTimeline(startIso);
+}
+
+export function normalizeSignalToSegment(
+  signal: RawSignalRecord
+): RawSignalRecord {
+  return {
+    ...signal,
+    forecast_time_utc: roundToNearestForecastSegment(signal.forecast_time_utc)
+  };
 }
 
 export function buildSyntheticArtifacts(
   signals: RawSignalRecord[],
   generatedAt: string,
-  resolution: number
+  resolution: number,
+  timeline: string[] = Array.from(
+    new Set(signals.map((item) => roundToNearestForecastSegment(item.forecast_time_utc)))
+  ).sort()
 ): SyntheticArtifacts {
-  const availableTimes = Array.from(
-    new Set(signals.map((item) => item.forecast_time_utc))
-  ).sort();
+  const normalizedSignals = signals.map(normalizeSignalToSegment);
+  const availableTimes = timeline;
 
-  const rawRows: ForecastFrameRow[] = signals.map((signal) => {
+  const rawRows: ForecastFrameRow[] = normalizedSignals.map((signal) => {
     const h3Index = latLngToCell(signal.latitude, signal.longitude, resolution);
     return {
       source_id: signal.id,
@@ -193,6 +205,28 @@ export function buildFrameResponse(
     grouped.set("exercise-areas", exerciseAreas);
   }
 
+  const activityFeatures = activities
+    .filter((activity) => activity.geometry)
+    .map((activity) => ({
+      type: "Feature" as const,
+      id: activity.id,
+      geometry: activity.geometry!,
+      properties: {
+        label: activity.name,
+        activity_type: activity.activity_type,
+        risk_level: activity.risk_level,
+        risk_summary: activity.risk_summary,
+        recommended_action: activity.recommended_action
+      }
+    }));
+
+  if (activityFeatures.length > 0) {
+    grouped.set("activity-risk", {
+      type: "FeatureCollection",
+      features: activityFeatures
+    });
+  }
+
   return {
     time,
     available_times: availableTimes,
@@ -212,10 +246,17 @@ export function buildHexResponse(
   bbox: BBox | null
 ): MapHexResponse {
   const filtered = bbox ? cells.filter((cell) => withinBbox(cell, bbox)) : cells;
+  const outline_cells: H3OutlineCell[] = filtered.map((cell) => ({
+    h3_index: cell.h3_index,
+    forecast_time_utc: cell.forecast_time_utc,
+    geometry: cell.geometry,
+    center: cell.center
+  }));
 
   return {
     time,
-    cells: filtered.map(({ center_lat: _lat, center_lng: _lng, ...rest }) => rest)
+    cells: filtered.map(({ center_lat: _lat, center_lng: _lng, ...rest }) => rest),
+    outline_cells
   };
 }
 
@@ -315,4 +356,15 @@ function withinBbox(cell: RiskHexCellRow, bbox: BBox): boolean {
     cell.center_lat >= bbox.south &&
     cell.center_lat <= bbox.north
   );
+}
+
+export function expandSignalWindow(
+  startIso: string,
+  endIso: string
+): { fetchStartIso: string; fetchEndIso: string } {
+  const halfSegmentMs = (FORECAST_SEGMENT_HOURS * 60 * 60 * 1000) / 2;
+  return {
+    fetchStartIso: new Date(new Date(startIso).getTime() - halfSegmentMs).toISOString(),
+    fetchEndIso: new Date(new Date(endIso).getTime() + halfSegmentMs).toISOString()
+  };
 }

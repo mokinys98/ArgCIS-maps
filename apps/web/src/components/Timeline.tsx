@@ -20,7 +20,7 @@ export function Timeline({
       <div className="panel-head">
         <div>
           <p className="eyebrow">Forecast animacija</p>
-          <h2>7 dienu laiko juosta</h2>
+          <h2>7 dienu laiko juosta kas 3 val.</h2>
         </div>
         <button onClick={onTogglePlayback} type="button">
           {isPlaying ? "Pause" : "Play"}

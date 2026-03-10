@@ -73,7 +73,7 @@ export interface GeoJsonFeatureCollection<
 }
 
 export type LayerKind = "raw" | "calculated" | "exercise";
-export type LayerRenderType = "circle" | "line" | "fill" | "hex";
+export type LayerRenderType = "circle" | "line" | "fill" | "hex" | "hex-outline";
 
 export interface LayerDefinition {
   id: string;
@@ -130,9 +130,17 @@ export interface RiskHexCell extends RiskSummary {
   raw_metrics: JsonObject;
 }
 
+export interface H3OutlineCell {
+  h3_index: string;
+  forecast_time_utc: string;
+  geometry: PolygonGeometry;
+  center: [number, number];
+}
+
 export interface MapHexResponse {
   time: string;
   cells: RiskHexCell[];
+  outline_cells: H3OutlineCell[];
 }
 
 export interface ExerciseScenario {

@@ -9,7 +9,8 @@ import type {
 import {
   demoFrame,
   demoLayerCatalog,
-  demoTimeline
+  demoTimeline,
+  floorToForecastSegment
 } from "@argcis/shared";
 import {
   startTransition,
@@ -31,8 +32,7 @@ function buildInitialLayerState(layers: LayerDefinition[]): Record<string, Layer
     layers.map((layer) => [
       layer.id,
       {
-        visible: layer.default_visible,
-        opacity: layer.default_opacity
+        visible: layer.default_visible
       }
     ])
   );
@@ -46,7 +46,9 @@ export default function App() {
   const [layerState, setLayerState] = useState<Record<string, LayerState>>(
     buildInitialLayerState(demoLayerCatalog().layers)
   );
-  const [selectedTime, setSelectedTime] = useState(demoTimeline()[0] ?? demoFrame("2026-03-07T00:00:00.000Z").time);
+  const [selectedTime, setSelectedTime] = useState(
+    floorToForecastSegment(new Date())
+  );
   const [frame, setFrame] = useState<MapFrameResponse | null>(null);
   const [hex, setHex] = useState<MapHexResponse | null>(null);
   const [savedMaps, setSavedMaps] = useState<SavedMap[]>([]);
@@ -132,15 +134,16 @@ export default function App() {
     let cancelled = false;
 
     startTransition(() => {
+      const requestedLayers = deferredLayerKey
+        ? deferredLayerKey.split(",").filter(Boolean)
+        : [];
+      const shouldFetchHex =
+        requestedLayers.includes("risk-hex") ||
+        requestedLayers.includes("h3-grid-outline");
+
       Promise.all([
-        api.getFrame(
-          selectedTime,
-          deferredLayerKey ? deferredLayerKey.split(",").filter(Boolean) : [],
-          sessionToken
-        ),
-        deferredLayerKey.split(",").includes("risk-hex")
-          ? api.getHex(selectedTime, bbox, sessionToken)
-          : Promise.resolve(null),
+        api.getFrame(selectedTime, requestedLayers, sessionToken),
+        shouldFetchHex ? api.getHex(selectedTime, bbox, sessionToken) : Promise.resolve(null),
         api.getActivities(selectedTime, sessionToken)
       ])
         .then(([frameResponse, hexResponse, activityResponse]) => {
@@ -222,16 +225,6 @@ export default function App() {
     }));
   }
 
-  function setOpacity(layerId: string, value: number) {
-    setLayerState((current) => ({
-      ...current,
-      [layerId]: {
-        ...current[layerId],
-        opacity: value
-      }
-    }));
-  }
-
   async function savePreset() {
     if (!draftName.trim()) {
       setUiError("Iveskite preset pavadinima.");
@@ -246,7 +239,7 @@ export default function App() {
           layer_id: layer.id,
           ordering: index,
           visible: layerState[layer.id]?.visible ?? layer.default_visible,
-          opacity: layerState[layer.id]?.opacity ?? layer.default_opacity,
+          opacity: layer.default_opacity,
           filters: {},
           active_time_utc: selectedTime
         }))
@@ -265,8 +258,7 @@ export default function App() {
       const next = { ...current };
       for (const layer of savedMap.layers) {
         next[layer.layer_id] = {
-          visible: layer.visible,
-          opacity: layer.opacity
+          visible: layer.visible
         };
       }
       return next;
@@ -303,7 +295,6 @@ export default function App() {
           draftName={draftName}
           onDraftNameChange={setDraftName}
           onToggle={toggleLayer}
-          onOpacity={setOpacity}
           onSavePreset={savePreset}
           onApplySavedMap={applySavedMap}
         />
