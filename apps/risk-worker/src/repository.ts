@@ -17,6 +17,7 @@ import type {
 } from "@argcis/shared";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { AppConfig } from "./config";
+import { formatErrorMessage, safeStringify, serializeError } from "./logging";
 import {
   attachRiskToActivities,
   buildFrameResponse,
@@ -71,7 +72,22 @@ interface ExerciseGeometryRow {
   h3_index: string | null;
 }
 
+interface SourceDebugRow {
+  source_id: string;
+  forecast_time_utc: string;
+  location_name: string;
+}
+
+interface RawFrameDebugRow {
+  source_id: string;
+  layer_id: string;
+  forecast_time_utc: string;
+  location_name: string;
+}
+
 const ROAD_POINT_LOOKBACK_HOURS = 12;
+const RAW_FRAME_INSERT_BATCH_SIZE = 500;
+const RISK_HEX_INSERT_BATCH_SIZE = 250;
 
 export class ArgcisRepository {
   private readonly client: SupabaseClient;
@@ -131,7 +147,7 @@ export class ArgcisRepository {
     const { data, error } = await this.client
       .from("risk_hex_cells")
       .select(
-        "h3_index, forecast_time_utc, geometry, center_lng, center_lat, risk_score, risk_level, risk_reasons, recommended_action, summary, raw_metrics"
+        "h3_index, forecast_time_utc, geometry, center_lng, center_lat, risk_score, signal_count, red_signal_count, yellow_signal_count, confidence_multiplier, risk_level, risk_reasons, recommended_action, summary, raw_metrics"
       )
       .eq("forecast_time_utc", time);
 
@@ -147,6 +163,10 @@ export class ArgcisRepository {
       center_lng: row.center_lng as number,
       center_lat: row.center_lat as number,
       risk_score: row.risk_score as number,
+      signal_count: row.signal_count as number,
+      red_signal_count: row.red_signal_count as number,
+      yellow_signal_count: row.yellow_signal_count as number,
+      confidence_multiplier: Number(row.confidence_multiplier),
       risk_level: row.risk_level as RiskHexCellRow["risk_level"],
       risk_reasons: (row.risk_reasons as string[]) ?? [],
       recommended_action: row.recommended_action as RiskHexCellRow["recommended_action"],
@@ -155,6 +175,47 @@ export class ArgcisRepository {
     }));
 
     return buildHexResponse(time, cells, bbox);
+  }
+
+  async debugForecastTime(time: string) {
+    const { fetchStartIso, fetchEndIso } = expandSignalWindow(time, time);
+    const nearbyStart = new Date(new Date(time).getTime() - 12 * 60 * 60 * 1000).toISOString();
+    const nearbyEnd = new Date(new Date(time).getTime() + 12 * 60 * 60 * 1000).toISOString();
+
+    const [meteoSource, roadSource, rawRows, nearbyRawTimes, riskFrame, nearbyRiskTimes] =
+      await Promise.all([
+        this.debugSourceWindow(this.config.meteoSourceView, fetchStartIso, fetchEndIso),
+        this.debugSourceWindow(this.config.roadSourceView, fetchStartIso, fetchEndIso),
+        this.debugRawFrameRows(time),
+        this.debugNearbyTimes("forecast_frames_raw", nearbyStart, nearbyEnd),
+        this.debugRiskFrame(time),
+        this.debugNearbyTimes("risk_frames", nearbyStart, nearbyEnd)
+      ]);
+
+    const rawByLayer = rawRows.reduce<Record<string, number>>((acc, row) => {
+      acc[row.layer_id] = (acc[row.layer_id] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    return {
+      time,
+      ingest_window: {
+        start_utc: fetchStartIso,
+        end_utc: fetchEndIso
+      },
+      ingest: {
+        meteo: meteoSource,
+        road: roadSource
+      },
+      worker_storage: {
+        raw_frame_count: rawRows.length,
+        raw_by_layer: rawByLayer,
+        raw_sample: rawRows.slice(0, 8),
+        nearby_raw_times: nearbyRawTimes,
+        risk_frame: riskFrame,
+        nearby_risk_times: nearbyRiskTimes
+      }
+    };
   }
 
   async listExercises(): Promise<ExerciseScenario[]> {
@@ -249,9 +310,13 @@ export class ArgcisRepository {
         starts_at: input.starts_at,
         ends_at: input.ends_at,
         geometry: null,
-          risk_level: "green",
-          risk_score: 0,
-          risk_reasons: [],
+        risk_score: 0,
+        signal_count: 0,
+        red_signal_count: 0,
+        yellow_signal_count: 0,
+        confidence_multiplier: 0,
+        risk_level: "green",
+        risk_reasons: [],
         recommended_action: "vykdyti",
         risk_summary: "Demo veikla sukurta be server-side iraso."
       };
@@ -277,8 +342,12 @@ export class ArgcisRepository {
     return {
       ...data,
       geometry: null,
-      risk_level: "green",
       risk_score: 0,
+      signal_count: 0,
+      red_signal_count: 0,
+      yellow_signal_count: 0,
+      confidence_multiplier: 0,
+      risk_level: "green",
       risk_reasons: [],
       recommended_action: "vykdyti",
       risk_summary: "Rizika bus priskirta pagal pasirinkta laika."
@@ -430,10 +499,18 @@ export class ArgcisRepository {
   }
 
   async recompute(nowIso: string): Promise<RecomputeResult> {
+    this.logInfo("recompute.start", {
+      recompute_time_utc: nowIso,
+      demo_mode: this.config.useDemoData,
+      h3_resolution: this.config.h3Resolution,
+      meteo_source_view: this.config.meteoSourceView,
+      road_source_view: this.config.roadSourceView
+    });
+
     if (this.config.useDemoData) {
       const frame = demoFrame(nowIso);
       const hex = demoHex(nowIso);
-      return {
+      const result = {
         generated_at: nowIso,
         frame_count: frame.available_times.length,
         raw_frame_count: frame.layers.reduce(
@@ -442,30 +519,86 @@ export class ArgcisRepository {
         ),
         hex_cell_count: hex.cells.length
       };
+      this.logInfo("recompute.demo_complete", result);
+      return result;
     }
 
-    const timeline = buildTimeline(nowIso);
-    const start = timeline[0];
-    const end = timeline[timeline.length - 1];
-    const sourceSignals = await this.fetchSourceSignals(start, end);
-    const artifacts = buildSyntheticArtifacts(
-      sourceSignals,
-      nowIso,
-      this.config.h3Resolution,
-      timeline
-    );
+    try {
+      const timeline = buildTimeline(nowIso);
+      const start = timeline[0];
+      const end = timeline[timeline.length - 1];
 
-    await this.deleteSyntheticWindow(start, end);
-    await this.insertRawFrames(artifacts.rawRows);
-    await this.insertRiskFrames(artifacts.riskFrames);
-    await this.insertRiskHexCells(artifacts.riskHexCells);
+      this.logInfo("recompute.timeline_built", {
+        segment_count: timeline.length,
+        start_utc: start,
+        end_utc: end
+      });
 
-    return {
-      generated_at: nowIso,
-      frame_count: artifacts.riskFrames.length,
-      raw_frame_count: artifacts.rawRows.length,
-      hex_cell_count: artifacts.riskHexCells.length
-    };
+      const sourceSignals = await this.fetchSourceSignals(start, end);
+
+      this.logInfo("recompute.source_signals_fetched", {
+        total_count: sourceSignals.length,
+        by_source: countBy(sourceSignals, (signal) => signal.source),
+        by_layer: countBy(sourceSignals, (signal) => signal.layer_id),
+        earliest_time_utc: sourceSignals[0]?.forecast_time_utc ?? null,
+        latest_time_utc: sourceSignals.at(-1)?.forecast_time_utc ?? null
+      });
+
+      const artifacts = buildSyntheticArtifacts(
+        sourceSignals,
+        nowIso,
+        this.config.h3Resolution,
+        timeline
+      );
+
+      this.logInfo("recompute.artifacts_built", {
+        raw_row_count: artifacts.rawRows.length,
+        risk_frame_count: artifacts.riskFrames.length,
+        risk_hex_count: artifacts.riskHexCells.length
+      });
+
+      const rawRowsByTime = groupBy(artifacts.rawRows, (row) => row.forecast_time_utc);
+      const riskHexCellsByTime = groupBy(artifacts.riskHexCells, (row) => row.forecast_time_utc);
+      const riskFrameByTime = new Map(
+        artifacts.riskFrames.map((row) => [row.forecast_time_utc, row])
+      );
+
+      for (const forecastTime of timeline) {
+        const rawRows = rawRowsByTime.get(forecastTime) ?? [];
+        const riskFrame = riskFrameByTime.get(forecastTime) ?? null;
+        const riskHexCells = riskHexCellsByTime.get(forecastTime) ?? [];
+
+        this.logInfo("recompute.time_slice_start", {
+          forecast_time_utc: forecastTime,
+          raw_row_count: rawRows.length,
+          has_risk_frame: riskFrame !== null,
+          risk_hex_count: riskHexCells.length
+        });
+
+        await this.replaceForecastTimeSlice(forecastTime, rawRows, riskFrame, riskHexCells);
+
+        this.logInfo("recompute.time_slice_complete", {
+          forecast_time_utc: forecastTime,
+          raw_row_count: rawRows.length,
+          risk_hex_count: riskHexCells.length
+        });
+      }
+
+      const result = {
+        generated_at: nowIso,
+        frame_count: artifacts.riskFrames.length,
+        raw_frame_count: artifacts.rawRows.length,
+        hex_cell_count: artifacts.riskHexCells.length
+      };
+
+      this.logInfo("recompute.complete", result);
+      return result;
+    } catch (error) {
+      this.logError("recompute.failed", error, {
+        recompute_time_utc: nowIso
+      });
+      throw error;
+    }
   }
 
   private async fetchSourceSignals(
@@ -491,6 +624,14 @@ export class ArgcisRepository {
       this.fetchRoadAlertSignals(fetchStartIso, fetchEndIso)
     ]);
 
+    this.logInfo("source_signals.loaded", {
+      fetch_start_utc: fetchStartIso,
+      fetch_end_utc: fetchEndIso,
+      meteo_count: meteoRows.length,
+      road_count: roadRows.length,
+      road_alert_count: roadAlertRows.length
+    });
+
     return [...meteoRows, ...roadRows, ...roadAlertRows];
   }
 
@@ -513,7 +654,17 @@ export class ArgcisRepository {
         return [];
       }
 
-      throw error;
+      throw this.createContextError(
+        `Failed to fetch signals from view ${viewName}`,
+        error,
+        {
+          view: viewName,
+          source,
+          layer_id: layerId,
+          start_utc: start,
+          end_utc: end
+        }
+      );
     }
 
     return (data ?? []).map((row) => ({
@@ -528,17 +679,95 @@ export class ArgcisRepository {
     }));
   }
 
-  private async listAvailableTimes(): Promise<string[]> {
+  private async debugSourceWindow(viewName: string, start: string, end: string) {
     const { data, error } = await this.client
-      .from("risk_frames")
-      .select("forecast_time_utc")
+      .from(viewName)
+      .select("source_id, forecast_time_utc, location_name")
+      .gte("forecast_time_utc", start)
+      .lte("forecast_time_utc", end)
       .order("forecast_time_utc", { ascending: true });
 
     if (error) {
       throw error;
     }
 
-    return (data ?? []).map((item) => item.forecast_time_utc as string);
+    const rows = ((data ?? []) as SourceDebugRow[]).map((row) => ({
+      source_id: row.source_id,
+      forecast_time_utc: row.forecast_time_utc,
+      location_name: row.location_name
+    }));
+
+    return {
+      view: viewName,
+      row_count: rows.length,
+      distinct_locations: new Set(rows.map((row) => row.location_name)).size,
+      earliest_time_utc: rows[0]?.forecast_time_utc ?? null,
+      latest_time_utc: rows.at(-1)?.forecast_time_utc ?? null,
+      sample_rows: rows.slice(0, 8)
+    };
+  }
+
+  private async listAvailableTimes(): Promise<string[]> {
+    return buildTimeline(new Date().toISOString());
+  }
+
+  private async debugRawFrameRows(time: string): Promise<RawFrameDebugRow[]> {
+    const { data, error } = await this.client
+      .from("forecast_frames_raw")
+      .select("source_id, layer_id, forecast_time_utc, location_name")
+      .eq("forecast_time_utc", time)
+      .order("layer_id", { ascending: true })
+      .order("location_name", { ascending: true });
+
+    if (error) {
+      throw error;
+    }
+
+    return (data ?? []) as RawFrameDebugRow[];
+  }
+
+  private async debugRiskFrame(time: string) {
+    const { data, error } = await this.client
+      .from("risk_frames")
+      .select("forecast_time_utc, generated_at, raw_feature_count, hex_cell_count")
+      .eq("forecast_time_utc", time)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      return null;
+    }
+
+    return {
+      forecast_time_utc: data.forecast_time_utc as string,
+      generated_at: data.generated_at as string,
+      raw_feature_count: data.raw_feature_count as number,
+      hex_cell_count: data.hex_cell_count as number
+    };
+  }
+
+  private async debugNearbyTimes(
+    tableName: "forecast_frames_raw" | "risk_frames",
+    start: string,
+    end: string
+  ): Promise<string[]> {
+    const { data, error } = await this.client
+      .from(tableName)
+      .select("forecast_time_utc")
+      .gte("forecast_time_utc", start)
+      .lte("forecast_time_utc", end)
+      .order("forecast_time_utc", { ascending: true });
+
+    if (error) {
+      throw error;
+    }
+
+    return Array.from(
+      new Set((data ?? []).map((row) => row.forecast_time_utc as string))
+    );
   }
 
   private async listForecastRows(
@@ -693,7 +922,7 @@ export class ArgcisRepository {
     const { data: cells, error: cellError } = await this.client
       .from("risk_hex_cells")
       .select(
-        "h3_index, forecast_time_utc, geometry, center_lng, center_lat, risk_score, risk_level, risk_reasons, recommended_action, summary, raw_metrics"
+        "h3_index, forecast_time_utc, geometry, center_lng, center_lat, risk_score, signal_count, red_signal_count, yellow_signal_count, confidence_multiplier, risk_level, risk_reasons, recommended_action, summary, raw_metrics"
       )
       .eq("forecast_time_utc", time);
 
@@ -709,6 +938,10 @@ export class ArgcisRepository {
       center_lng: row.center_lng as number,
       center_lat: row.center_lat as number,
       risk_score: row.risk_score as number,
+      signal_count: row.signal_count as number,
+      red_signal_count: row.red_signal_count as number,
+      yellow_signal_count: row.yellow_signal_count as number,
+      confidence_multiplier: Number(row.confidence_multiplier),
       risk_level: row.risk_level as RiskHexCellRow["risk_level"],
       risk_reasons: (row.risk_reasons as string[]) ?? [],
       recommended_action: row.recommended_action as RiskHexCellRow["recommended_action"],
@@ -730,17 +963,49 @@ export class ArgcisRepository {
     return attachRiskToActivities(rows, mappedCells);
   }
 
-  private async deleteSyntheticWindow(start: string, end: string): Promise<void> {
+  private async replaceForecastTimeSlice(
+    forecastTime: string,
+    rawRows: ForecastFrameRow[],
+    riskFrame: {
+      forecast_time_utc: string;
+      generated_at: string;
+      raw_feature_count: number;
+      hex_cell_count: number;
+    } | null,
+    riskHexCells: RiskHexCellRow[]
+  ): Promise<void> {
+    await this.deleteForecastTimeSlice(forecastTime);
+
+    if (rawRows.length > 0) {
+      await this.insertRawFrames(rawRows);
+    }
+
+    if (riskFrame) {
+      await this.insertRiskFrames([riskFrame]);
+    }
+
+    if (riskHexCells.length > 0) {
+      await this.insertRiskHexCells(riskHexCells);
+    }
+  }
+
+  private async deleteForecastTimeSlice(forecastTime: string): Promise<void> {
     const tables = ["forecast_frames_raw", "risk_hex_cells", "risk_frames"];
     for (const table of tables) {
       const { error } = await this.client
         .from(table)
         .delete()
-        .gte("forecast_time_utc", start)
-        .lte("forecast_time_utc", end);
+        .eq("forecast_time_utc", forecastTime);
 
       if (error) {
-        throw error;
+        throw this.createContextError(
+          `Failed to delete forecast time slice from ${table}`,
+          error,
+          {
+            table,
+            forecast_time_utc: forecastTime
+          }
+        );
       }
     }
   }
@@ -750,22 +1015,36 @@ export class ArgcisRepository {
       return;
     }
 
-    const payload = rows.map((row) => ({
-      source_id: row.source_id,
-      source: row.source,
-      layer_id: row.layer_id,
-      forecast_time_utc: row.forecast_time_utc,
-      location_name: row.location_name,
-      latitude: row.latitude,
-      longitude: row.longitude,
-      h3_index: row.h3_index,
-      geometry: row.geometry,
-      metrics: row.metrics
-    }));
+    const batches = chunkArray(rows, RAW_FRAME_INSERT_BATCH_SIZE);
 
-    const { error } = await this.client.from("forecast_frames_raw").insert(payload);
-    if (error) {
-      throw error;
+    for (const [index, batch] of batches.entries()) {
+      const payload = batch.map((row) => ({
+        source_id: row.source_id,
+        source: row.source,
+        layer_id: row.layer_id,
+        forecast_time_utc: row.forecast_time_utc,
+        location_name: row.location_name,
+        latitude: row.latitude,
+        longitude: row.longitude,
+        h3_index: row.h3_index,
+        geometry: row.geometry,
+        metrics: row.metrics
+      }));
+
+      const { error } = await this.client.from("forecast_frames_raw").insert(payload);
+      if (error) {
+        throw this.createContextError(
+          "Failed to insert forecast_frames_raw rows",
+          error,
+          {
+            row_count: rows.length,
+            batch_index: index + 1,
+            batch_count: batches.length,
+            batch_size: batch.length,
+            sample_time_utc: batch[0]?.forecast_time_utc ?? null
+          }
+        );
+      }
     }
   }
 
@@ -781,7 +1060,14 @@ export class ArgcisRepository {
 
     const { error } = await this.client.from("risk_frames").insert(rows);
     if (error) {
-      throw error;
+      throw this.createContextError(
+        "Failed to insert risk_frames rows",
+        error,
+        {
+          row_count: rows.length,
+          sample_time_utc: rows[0]?.forecast_time_utc ?? null
+        }
+      );
     }
   }
 
@@ -790,23 +1076,42 @@ export class ArgcisRepository {
       return;
     }
 
-    const payload = rows.map((row) => ({
-      h3_index: row.h3_index,
-      forecast_time_utc: row.forecast_time_utc,
-      geometry: row.geometry,
-      center_lng: row.center_lng,
-      center_lat: row.center_lat,
-      risk_score: row.risk_score,
-      risk_level: row.risk_level,
-      risk_reasons: row.risk_reasons,
-      recommended_action: row.recommended_action,
-      summary: row.risk_summary,
-      raw_metrics: row.raw_metrics
-    }));
+    const batches = chunkArray(rows, RISK_HEX_INSERT_BATCH_SIZE);
 
-    const { error } = await this.client.from("risk_hex_cells").insert(payload);
-    if (error) {
-      throw error;
+    for (const [index, batch] of batches.entries()) {
+      const payload = batch.map((row) => ({
+        h3_index: row.h3_index,
+        forecast_time_utc: row.forecast_time_utc,
+        geometry: row.geometry,
+        center_lng: row.center_lng,
+        center_lat: row.center_lat,
+        risk_score: row.risk_score,
+        signal_count: row.signal_count,
+        red_signal_count: row.red_signal_count,
+        yellow_signal_count: row.yellow_signal_count,
+        confidence_multiplier: row.confidence_multiplier,
+        risk_level: row.risk_level,
+        risk_reasons: row.risk_reasons,
+        recommended_action: row.recommended_action,
+        summary: row.risk_summary,
+        raw_metrics: row.raw_metrics
+      }));
+
+      const { error } = await this.client.from("risk_hex_cells").insert(payload);
+      if (error) {
+        throw this.createContextError(
+          "Failed to insert risk_hex_cells rows",
+          error,
+          {
+            row_count: rows.length,
+            batch_index: index + 1,
+            batch_count: batches.length,
+            batch_size: batch.length,
+            sample_time_utc: batch[0]?.forecast_time_utc ?? null,
+            sample_h3_index: batch[0]?.h3_index ?? null
+          }
+        );
+      }
     }
   }
 
@@ -822,7 +1127,14 @@ export class ArgcisRepository {
       .order("collected_at_utc", { ascending: true });
 
     if (error) {
-      throw error;
+      throw this.createContextError(
+        "Failed to fetch road weather alerts",
+        error,
+        {
+          start_utc: start,
+          end_utc: end
+        }
+      );
     }
 
     const alerts = (data ?? []) as Array<{
@@ -843,7 +1155,13 @@ export class ArgcisRepository {
       .in("id", stationIds);
 
     if (stationError) {
-      throw stationError;
+      throw this.createContextError(
+        "Failed to fetch road weather stations",
+        stationError,
+        {
+          station_count: stationIds.length
+        }
+      );
     }
 
     const stationMap = new Map<number, {
@@ -895,6 +1213,34 @@ export class ArgcisRepository {
       (value): value is RawSignalRecord => value !== null
     );
   }
+
+  private logInfo(event: string, details: Record<string, unknown>): void {
+    console.info(`[repository] ${event} ${safeStringify(details)}`);
+  }
+
+  private logError(
+    event: string,
+    error: unknown,
+    details: Record<string, unknown>
+  ): void {
+    console.error(
+      `[repository] ${event} ${safeStringify({
+        ...details,
+        error: serializeError(error, { includeStack: true })
+      })}`
+    );
+  }
+
+  private createContextError(
+    message: string,
+    error: unknown,
+    context: Record<string, unknown>
+  ): Error {
+    return Object.assign(
+      new Error(`${message}. ${formatErrorMessage(error)}. context=${safeStringify(context)}`),
+      { cause: error }
+    );
+  }
 }
 
 function geometryCentroid(geometry: GeoJsonGeometry): [number, number] {
@@ -913,4 +1259,41 @@ function geometryCentroid(geometry: GeoJsonGeometry): [number, number] {
   );
 
   return [sum[0] / points.length, sum[1] / points.length];
+}
+
+function countBy<T>(
+  items: T[],
+  pickKey: (item: T) => string
+): Record<string, number> {
+  return items.reduce<Record<string, number>>((acc, item) => {
+    const key = pickKey(item);
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+}
+
+function groupBy<T>(
+  items: T[],
+  pickKey: (item: T) => string
+): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+
+  for (const item of items) {
+    const key = pickKey(item);
+    const current = grouped.get(key) ?? [];
+    current.push(item);
+    grouped.set(key, current);
+  }
+
+  return grouped;
+}
+
+function chunkArray<T>(items: T[], chunkSize: number): T[][] {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+
+  return chunks;
 }

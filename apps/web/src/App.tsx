@@ -10,6 +10,7 @@ import {
   demoFrame,
   demoLayerCatalog,
   demoTimeline,
+  findClosestForecastTime,
   floorToForecastSegment
 } from "@argcis/shared";
 import {
@@ -151,13 +152,18 @@ export default function App() {
             return;
           }
 
+          const resolvedTime = frameResponse.available_times.includes(selectedTime)
+            ? selectedTime
+            : findClosestForecastTime(frameResponse.available_times, selectedTime);
+
+          if (resolvedTime && resolvedTime !== selectedTime) {
+            setSelectedTime(resolvedTime);
+            return;
+          }
+
           setFrame(frameResponse);
           setHex(hexResponse);
           setActivities(activityResponse);
-
-          if (!frame && frameResponse.available_times.length > 0) {
-            setSelectedTime(frameResponse.available_times[0] ?? selectedTime);
-          }
         })
         .catch((error) => {
           if (!cancelled) {

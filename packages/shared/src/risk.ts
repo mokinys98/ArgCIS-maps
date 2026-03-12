@@ -8,8 +8,12 @@ import type {
 const HEX_AGGREGATION_THRESHOLDS = {
   redThresholdScore: 70,
   yellowThresholdScore: 35,
-  yellowWeight: 40,
-  maxPointScoreWeight: 0.1
+  averageWeight: 0.6,
+  severeShareWeight: 0.25,
+  maxPointScoreWeight: 0.15,
+  yellowShareValue: 40,
+  roadDominantBonus: 15,
+  roadPresentBonus: 8
 } as const;
 
 export interface ThresholdConfig {
@@ -48,6 +52,26 @@ function pushReason(target: string[], reason: string): void {
   if (!target.includes(reason)) {
     target.push(reason);
   }
+}
+
+export function confidenceMultiplierForSignalCount(signalCount: number): number {
+  if (signalCount >= 5) {
+    return 1;
+  }
+
+  if (signalCount >= 3) {
+    return 0.85;
+  }
+
+  if (signalCount === 2) {
+    return 0.7;
+  }
+
+  if (signalCount === 1) {
+    return 0.5;
+  }
+
+  return 0;
 }
 
 export function evaluateRisk(
@@ -113,6 +137,10 @@ export function evaluateRisk(
 
   return {
     risk_score: score,
+    signal_count: 1,
+    red_signal_count: level === "red" ? 1 : 0,
+    yellow_signal_count: level === "yellow" ? 1 : 0,
+    confidence_multiplier: 1,
     risk_level: level,
     risk_reasons: reasons,
     recommended_action,
@@ -124,6 +152,10 @@ export function aggregateRiskSummaries(items: RiskSummary[]): RiskSummary {
   if (items.length === 0) {
     return {
       risk_score: 0,
+      signal_count: 0,
+      red_signal_count: 0,
+      yellow_signal_count: 0,
+      confidence_multiplier: 0,
       risk_level: "green",
       risk_reasons: [],
       recommended_action: "vykdyti",
@@ -131,23 +163,41 @@ export function aggregateRiskSummaries(items: RiskSummary[]): RiskSummary {
     };
   }
 
-  if (items.length === 1) {
-    return items[0]!;
-  }
-
   const redItems = items.filter((item) => item.risk_level === "red");
   const yellowItems = items.filter((item) => item.risk_level === "yellow");
   const yellowOrRedItems = [...redItems, ...yellowItems];
+  const signalCount = items.length;
+  const redSignalCount = redItems.length;
+  const yellowSignalCount = yellowItems.length;
   const redShare = redItems.length / items.length;
   const yellowShare = yellowItems.length / items.length;
+  const averageStationScore =
+    items.reduce((total, item) => total + item.risk_score, 0) / items.length;
+  const severeShareScore =
+    redShare * 100 + yellowShare * HEX_AGGREGATION_THRESHOLDS.yellowShareValue;
   const maxPointScore = Math.max(...items.map((item) => item.risk_score));
+  const roadHardCount = items.filter((item) =>
+    item.risk_reasons.some(
+      (reason) =>
+        reason === "kelio danga apledejusi" || reason === "eismo apribojimas"
+    )
+  ).length;
+  const roadShare = roadHardCount / signalCount;
+  const roadHardBonus =
+    roadShare >= 0.3
+      ? HEX_AGGREGATION_THRESHOLDS.roadDominantBonus
+      : roadHardCount > 0 && signalCount >= 3
+        ? HEX_AGGREGATION_THRESHOLDS.roadPresentBonus
+        : 0;
+  const rawHexScore =
+    averageStationScore * HEX_AGGREGATION_THRESHOLDS.averageWeight +
+    severeShareScore * HEX_AGGREGATION_THRESHOLDS.severeShareWeight +
+    maxPointScore * HEX_AGGREGATION_THRESHOLDS.maxPointScoreWeight +
+    roadHardBonus;
+  const confidenceMultiplier = confidenceMultiplierForSignalCount(signalCount);
   const aggregateScore = Math.min(
     100,
-    Math.round(
-      redShare * 100 +
-        yellowShare * HEX_AGGREGATION_THRESHOLDS.yellowWeight +
-        maxPointScore * HEX_AGGREGATION_THRESHOLDS.maxPointScoreWeight
-    )
+    Math.round(rawHexScore * confidenceMultiplier)
   );
 
   const aggregateLevel = deriveRiskLevelFromScore(aggregateScore);
@@ -167,6 +217,10 @@ export function aggregateRiskSummaries(items: RiskSummary[]): RiskSummary {
 
   return {
     risk_score: aggregateScore,
+    signal_count: signalCount,
+    red_signal_count: redSignalCount,
+    yellow_signal_count: yellowSignalCount,
+    confidence_multiplier: confidenceMultiplier,
     risk_level: aggregateLevel,
     risk_reasons: combinedReasons,
     recommended_action: chooseAction(aggregateLevel, combinedReasons),

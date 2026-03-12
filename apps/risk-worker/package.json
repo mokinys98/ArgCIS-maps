@@ -6,6 +6,7 @@
   "scripts": {
     "build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
     "dev": "wrangler dev",
+    "recompute:dev": "powershell -ExecutionPolicy Bypass -File .\\scripts\\recompute-dev.ps1",
     "test": "node ../../node_modules/vitest/vitest.mjs run tests --pool=threads",
     "typecheck": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
   },

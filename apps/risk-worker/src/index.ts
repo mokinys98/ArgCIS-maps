@@ -8,6 +8,7 @@ import {
   parseLayerIds,
   readJson
 } from "./http";
+import { formatErrorMessage, safeStringify, serializeError } from "./logging";
 import { ArgcisRepository } from "./repository";
 
 async function handleRequest(request: Request, env: Env): Promise<Response> {
@@ -56,6 +57,18 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         : floorToHour(new Date());
       const bbox = parseBbox(url.searchParams.get("bbox"));
       return jsonResponse(config, await repository.getHex(time, bbox), 200, requestOrigin);
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/internal/debug/forecast") {
+      const time = url.searchParams.get("time")
+        ? roundToNearestForecastSegment(url.searchParams.get("time")!)
+        : floorToHour(new Date());
+      return jsonResponse(
+        config,
+        await repository.debugForecastTime(time),
+        200,
+        requestOrigin
+      );
     }
 
     if (request.method === "GET" && url.pathname === "/api/exercises") {
@@ -153,6 +166,14 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       const recomputeTime = url.searchParams.get("time")
         ? roundToNearestForecastSegment(url.searchParams.get("time")!)
         : floorToHour(new Date());
+      console.info(
+        `[api.internal.recompute] ${safeStringify({
+          method: request.method,
+          path: url.pathname,
+          requested_time: url.searchParams.get("time"),
+          recompute_time_utc: recomputeTime
+        })}`
+      );
       return jsonResponse(
         config,
         await repository.recompute(recomputeTime),
@@ -163,18 +184,28 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
     return jsonResponse(config, { error: "Not found." }, 404, requestOrigin);
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : typeof error === "object" && error !== null
-          ? JSON.stringify(error)
-          : "Unexpected error.";
+    const details = serializeError(error, { includeStack: true });
+    const message = formatErrorMessage(error);
+
+    console.error(
+      `[request.failed] ${safeStringify({
+        method: request.method,
+        path: url.pathname,
+        query: url.search,
+        error: details
+      })}`
+    );
 
     return jsonResponse(
       config,
-      {
-        error: message
-      },
+      url.pathname.startsWith("/api/internal/")
+        ? {
+            error: message,
+            details: serializeError(error)
+          }
+        : {
+            error: message
+          },
       500,
       requestOrigin
     );

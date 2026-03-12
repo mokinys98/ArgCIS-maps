@@ -66,6 +66,28 @@ describe("risk engine", () => {
     expect(artifacts.rawRows).toHaveLength(2);
     expect(artifacts.riskHexCells.length).toBeGreaterThan(0);
     expect(artifacts.riskHexCells[0]?.risk_level).toBe("red");
+    expect(artifacts.riskHexCells[0]?.signal_count).toBe(2);
+    expect(artifacts.riskHexCells[0]?.confidence_multiplier).toBe(0.7);
+  });
+
+  it("projects a single source timestamp across the full 7 day timeline", () => {
+    const timeline = buildTimeline("2026-03-07T10:31:00.000Z");
+    const artifacts = buildSyntheticArtifacts(
+      signals,
+      "2026-03-07T00:00:00.000Z",
+      7,
+      timeline
+    );
+
+    expect(artifacts.availableTimes).toHaveLength(56);
+    expect(artifacts.riskFrames).toHaveLength(56);
+    expect(artifacts.rawRows).toHaveLength(signals.length * timeline.length);
+    expect(new Set(artifacts.rawRows.map((row) => row.forecast_time_utc))).toEqual(
+      new Set(timeline)
+    );
+    expect(new Set(artifacts.riskHexCells.map((cell) => cell.forecast_time_utc))).toEqual(
+      new Set(timeline)
+    );
   });
 
   it("builds frame and hex API shapes", () => {
@@ -117,6 +139,10 @@ describe("risk engine", () => {
             coordinates: [25.2797, 54.6872]
           },
           risk_score: 45,
+          signal_count: 1,
+          red_signal_count: 0,
+          yellow_signal_count: 1,
+          confidence_multiplier: 1,
           risk_level: "yellow",
           risk_reasons: ["gusiai virs 15 m/s"],
           recommended_action: "vykdyti su ribojimais",
@@ -209,6 +235,8 @@ describe("risk engine", () => {
       7
     );
 
-    expect(artifacts.riskHexCells[0]?.risk_level).toBe("green");
+    expect(artifacts.riskHexCells[0]?.risk_level).toBe("yellow");
+    expect(artifacts.riskHexCells[0]?.signal_count).toBe(4);
+    expect(artifacts.riskHexCells[0]?.confidence_multiplier).toBe(0.85);
   });
 });

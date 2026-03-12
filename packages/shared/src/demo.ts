@@ -236,6 +236,10 @@ function buildFrameLayerData(time: string): FrameLayerData[] {
           properties: {
             label: activity.name,
             risk_score: activity.risk_score,
+            signal_count: activity.signal_count,
+            red_signal_count: activity.red_signal_count,
+            yellow_signal_count: activity.yellow_signal_count,
+            confidence_multiplier: activity.confidence_multiplier,
             risk_level: activity.risk_level,
             recommended_action: activity.recommended_action,
             risk_summary: activity.risk_summary

@@ -4,6 +4,7 @@ import {
   aggregateRiskSummaries,
   buildForecastTimeline,
   evaluateRisk,
+  findClosestForecastTime,
   roundToNearestForecastSegment
 } from "@argcis/shared";
 import type {
@@ -89,7 +90,10 @@ export function buildSyntheticArtifacts(
     new Set(signals.map((item) => roundToNearestForecastSegment(item.forecast_time_utc)))
   ).sort()
 ): SyntheticArtifacts {
-  const normalizedSignals = signals.map(normalizeSignalToSegment);
+  const normalizedSignals = projectSignalsAcrossTimeline(
+    signals.map(normalizeSignalToSegment),
+    timeline
+  );
   const availableTimes = timeline;
 
   const rawRows: ForecastFrameRow[] = normalizedSignals.map((signal) => {
@@ -171,6 +175,69 @@ export function buildSyntheticArtifacts(
   };
 }
 
+function projectSignalsAcrossTimeline(
+  signals: RawSignalRecord[],
+  timeline: string[]
+): RawSignalRecord[] {
+  if (signals.length === 0 || timeline.length === 0) {
+    return signals;
+  }
+
+  const series = new Map<string, RawSignalRecord[]>();
+  for (const signal of signals) {
+    const key = buildSignalSeriesKey(signal);
+    const current = series.get(key) ?? [];
+    current.push(signal);
+    series.set(key, current);
+  }
+
+  const projectedSignals: RawSignalRecord[] = [];
+  for (const signalSeries of series.values()) {
+    const byTime = new Map<string, RawSignalRecord>();
+    for (const signal of signalSeries) {
+      byTime.set(signal.forecast_time_utc, signal);
+    }
+
+    const seriesTimes = Array.from(byTime.keys()).sort();
+    for (const forecastTime of timeline) {
+      const matchedTime =
+        byTime.has(forecastTime)
+          ? forecastTime
+          : findClosestForecastTime(seriesTimes, forecastTime);
+
+      if (!matchedTime) {
+        continue;
+      }
+
+      const sourceSignal = byTime.get(matchedTime);
+      if (!sourceSignal) {
+        continue;
+      }
+
+      projectedSignals.push({
+        ...sourceSignal,
+        forecast_time_utc: forecastTime
+      });
+    }
+  }
+
+  return projectedSignals;
+}
+
+function buildSignalSeriesKey(signal: RawSignalRecord): string {
+  const alertCode =
+    signal.layer_id === "road-alerts" ? String(signal.metrics.alert_code ?? "") : "";
+
+  return [
+    signal.source,
+    signal.layer_id,
+    signal.location_name,
+    signal.latitude.toFixed(6),
+    signal.longitude.toFixed(6),
+    alertCode
+  ].join("::");
+}
+
 export function buildFrameResponse(
   time: string,
   availableTimes: string[],
@@ -214,6 +281,10 @@ export function buildFrameResponse(
       properties: {
         label: activity.name,
         risk_score: activity.risk_score,
+        signal_count: activity.signal_count,
+        red_signal_count: activity.red_signal_count,
+        yellow_signal_count: activity.yellow_signal_count,
+        confidence_multiplier: activity.confidence_multiplier,
         activity_type: activity.activity_type,
         risk_level: activity.risk_level,
         risk_summary: activity.risk_summary,
@@ -271,6 +342,10 @@ export function attachRiskToActivities(
       matched ??
       ({
         risk_score: 0,
+        signal_count: 0,
+        red_signal_count: 0,
+        yellow_signal_count: 0,
+        confidence_multiplier: 0,
         risk_level: "green",
         risk_reasons: [],
         recommended_action: "vykdyti",

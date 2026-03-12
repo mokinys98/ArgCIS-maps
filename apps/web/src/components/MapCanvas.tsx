@@ -1,5 +1,5 @@
 import type { PickingInfo } from "@deck.gl/core";
-import { GeoJsonLayer, IconLayer, TextLayer } from "@deck.gl/layers";
+import { GeoJsonLayer, IconLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import type {
   FrameLayerData,
@@ -7,7 +7,7 @@ import type {
   LayerDefinition,
   MapHexResponse
 } from "@argcis/shared";
-import { riskColor } from "@argcis/shared";
+import { deriveRiskLevelFromScore, riskColor } from "@argcis/shared";
 import maplibregl from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
 import { createBasemapStyle } from "../lib/basemap";
@@ -140,7 +140,7 @@ function buildOverlayLayers({
   layerMap: Map<string, LayerDefinition>;
   zoom: number;
 }) {
-  const deckLayers: Array<GeoJsonLayer | IconLayer<PointMarker> | TextLayer<RiskLabel>> = [];
+  const deckLayers: Array<GeoJsonLayer | IconLayer<PointMarker>> = [];
   const shouldRenderFillZonesOnly = !isCenterInLithuania(map.getCenter());
 
   for (const layer of layers) {
@@ -163,6 +163,10 @@ function buildOverlayLayers({
               geometry: cell.geometry,
               properties: {
                 risk_score: cell.risk_score,
+                signal_count: cell.signal_count,
+                red_signal_count: cell.red_signal_count,
+                yellow_signal_count: cell.yellow_signal_count,
+                confidence_multiplier: cell.confidence_multiplier,
                 risk_level: cell.risk_level,
                 recommended_action: cell.recommended_action,
                 risk_summary: cell.risk_summary,
@@ -176,7 +180,7 @@ function buildOverlayLayers({
           getFillColor: (feature: { properties?: Record<string, unknown> }) =>
             toRgba(
               riskColor(
-                String(feature.properties?.risk_level) as "green" | "yellow" | "red"
+                deriveRiskLevelFromScore(Number(feature.properties?.risk_score ?? 0))
               ),
               layer.default_opacity
             ),
@@ -186,29 +190,6 @@ function buildOverlayLayers({
           onClick: (info: PickingInfo) => showPopup(map, info)
         })
       );
-      if (zoom >= 6) {
-        deckLayers.push(
-          new TextLayer<RiskLabel>({
-            id: "risk-hex-score-labels",
-            data: riskCells.map((cell) => ({
-              position: cell.center,
-              text: String(cell.risk_score),
-              riskLevel: cell.risk_level
-            })),
-            pickable: false,
-            getPosition: (item) => item.position,
-            getText: (item) => item.text,
-            getSize: getRiskScoreTextSize(zoom),
-            sizeUnits: "pixels",
-            getColor: (item) =>
-              item.riskLevel === "yellow" ? [15, 23, 42, 255] : [255, 255, 255, 245],
-            getTextAnchor: "middle",
-            getAlignmentBaseline: "center",
-            fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
-            fontWeight: 800
-          })
-        );
-      }
       continue;
     }
 
@@ -335,11 +316,6 @@ function getDynamicHexOutlineWidth(zoom: number, isGridOutline: boolean): number
   return baseWidth + zoomInBoost + zoomOutBoost;
 }
 
-function getRiskScoreTextSize(zoom: number): number {
-  const clampedZoom = Math.max(6, Math.min(12, zoom));
-  return 11 + (clampedZoom - 6) * 1.2;
-}
-
 interface PointMarker {
   id: string;
   coordinates: [number, number];
@@ -350,12 +326,6 @@ interface PointMarker {
     height: number;
     anchorY: number;
   };
-}
-
-interface RiskLabel {
-  position: [number, number];
-  text: string;
-  riskLevel: "green" | "yellow" | "red";
 }
 
 const METEO_ICON = {
@@ -410,7 +380,7 @@ function chooseFillColor(
 ): [number, number, number, number] {
   if (layerId === "activity-risk") {
     return toRgba(
-      riskColor(String(feature.properties?.risk_level) as "green" | "yellow" | "red"),
+      riskColor(deriveRiskLevelFromScore(Number(feature.properties?.risk_score ?? 0))),
       0.4
     );
   }
@@ -425,7 +395,7 @@ function chooseLineColor(
 ): [number, number, number, number] {
   if (layerId === "activity-risk") {
     return toRgba(
-      riskColor(String(feature.properties?.risk_level) as "green" | "yellow" | "red"),
+      riskColor(deriveRiskLevelFromScore(Number(feature.properties?.risk_score ?? 0))),
       0.95
     );
   }
@@ -455,7 +425,7 @@ function choosePointColor(
 
   if (layerId === "activity-risk") {
     return toRgba(
-      riskColor(String(feature.properties?.risk_level) as "green" | "yellow" | "red"),
+      riskColor(deriveRiskLevelFromScore(Number(feature.properties?.risk_score ?? 0))),
       0.95
     );
   }
@@ -487,9 +457,30 @@ function showPopup(map: maplibregl.Map, info: PickingInfo) {
         ""
     );
   const action = String(properties.recommended_action ?? "");
+  const signalCount = Number(properties.signal_count ?? NaN);
+  const redSignalCount = Number(properties.red_signal_count ?? NaN);
+  const yellowSignalCount = Number(properties.yellow_signal_count ?? NaN);
+  const confidence = Number(properties.confidence_multiplier ?? NaN);
+  const confidenceLabel =
+    Number.isFinite(confidence) && signalCount > 0
+      ? confidence < 1
+        ? `Confidence: ${confidence.toFixed(2)} (low confidence)`
+        : `Confidence: ${confidence.toFixed(2)}`
+      : "";
+  const scoreMeta =
+    properties.risk_score !== undefined
+      ? `Risk score: ${properties.risk_score}`
+      : "";
+  const signalMeta =
+    Number.isFinite(signalCount) && signalCount > 0
+      ? `Signals: ${signalCount} | Red: ${Number.isFinite(redSignalCount) ? redSignalCount : 0} | Yellow: ${Number.isFinite(yellowSignalCount) ? yellowSignalCount : 0}`
+      : "";
+  const meta = [scoreMeta, signalMeta, confidenceLabel].filter(Boolean).join("<br/>");
 
   new maplibregl.Popup({ offset: 12 })
     .setLngLat([info.coordinate[0], info.coordinate[1]])
-    .setHTML(`<strong>${title}</strong><p>${body}</p><small>${action}</small>`)
+    .setHTML(
+      `<strong>${title}</strong><p>${body}</p><small>${meta}</small><br/><small>${action}</small>`
+    )
     .addTo(map);
 }

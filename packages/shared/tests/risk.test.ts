@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   FORECAST_SEGMENT_COUNT,
   FORECAST_SEGMENT_HOURS,
-  buildForecastTimeline,
   aggregateRiskSummaries,
+  buildForecastTimeline,
   demoFrame,
   demoHex,
   demoTimeline,
-  evaluateRisk
+  evaluateRisk,
+  findClosestForecastTime
 } from "../src";
 
 describe("risk logic", () => {
@@ -33,16 +34,45 @@ describe("risk logic", () => {
     expect(summary.risk_reasons).toContain("eismo apribojimas");
   });
 
-  it("does not mark the whole hex red from a single red outlier", () => {
+  it("does not mark the whole hex red from a single red outlier out of many", () => {
     const summary = aggregateRiskSummaries([
       evaluateRisk({ road_restriction: true }),
-      evaluateRisk({}),
-      evaluateRisk({}),
-      evaluateRisk({})
+      ...Array.from({ length: 14 }, () => evaluateRisk({}))
     ]);
 
     expect(summary.risk_level).toBe("green");
-    expect(summary.risk_reasons).toHaveLength(0);
+    expect(summary.signal_count).toBe(15);
+    expect(summary.red_signal_count).toBe(1);
+  });
+
+  it("can keep 2 of 2 severe road signals red", () => {
+    const summary = aggregateRiskSummaries([
+      evaluateRisk({ road_restriction: true }),
+      evaluateRisk({ road_ice: true })
+    ]);
+
+    expect(summary.risk_level).toBe("red");
+    expect(summary.confidence_multiplier).toBe(0.7);
+  });
+
+  it("does not overstate 2 of 2 severe weather signals after confidence penalty", () => {
+    const summary = aggregateRiskSummaries([
+      evaluateRisk({ wind_gust_ms: 23, thunder_probability: 75 }),
+      evaluateRisk({ wind_gust_ms: 21, thunder_probability: 80 })
+    ]);
+
+    expect(summary.risk_level).toBe("yellow");
+    expect(summary.risk_score).toBeLessThan(70);
+  });
+
+  it("reduces final hex score when only one signal exists", () => {
+    const summary = aggregateRiskSummaries([
+      evaluateRisk({ wind_gust_ms: 23, thunder_probability: 75 })
+    ]);
+
+    expect(summary.signal_count).toBe(1);
+    expect(summary.confidence_multiplier).toBe(0.5);
+    expect(summary.risk_level).toBe("yellow");
   });
 
   it("provides demo fixtures for a full week timeline", () => {
@@ -60,5 +90,19 @@ describe("risk logic", () => {
     const timeline = buildForecastTimeline("2026-03-07T10:31:00.000Z");
     expect(timeline).toHaveLength(56);
     expect(timeline[0]).toBe("2026-03-07T09:00:00.000Z");
+  });
+
+  it("finds exact matching forecast segment when available", () => {
+    const timeline = buildForecastTimeline("2026-03-07T10:31:00.000Z");
+    expect(findClosestForecastTime(timeline, "2026-03-07T12:00:00.000Z")).toBe(
+      "2026-03-07T12:00:00.000Z"
+    );
+  });
+
+  it("finds nearest forecast segment instead of falling back to timeline start", () => {
+    const timeline = buildForecastTimeline("2026-03-07T09:00:00.000Z");
+    expect(findClosestForecastTime(timeline, "2026-03-09T10:00:00.000Z")).toBe(
+      "2026-03-09T09:00:00.000Z"
+    );
   });
 });

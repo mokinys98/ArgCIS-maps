@@ -22,6 +22,10 @@ export type RecommendedAction =
 
 export interface RiskSummary {
   risk_score: number;
+  signal_count: number;
+  red_signal_count: number;
+  yellow_signal_count: number;
+  confidence_multiplier: number;
   risk_level: RiskLevel;
   risk_reasons: string[];
   recommended_action: RecommendedAction;
