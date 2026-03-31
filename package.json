@@ -10,7 +10,8 @@
     "build": "npm run build --workspaces --if-present",
     "dev:web": "npm run dev --workspace @argcis/web",
     "dev:worker": "npm run dev --workspace @argcis/risk-worker",
-    "dev": "concurrently \"npm run dev:web\" \"npm run dev:worker\"",
+    "recompute:dev": "npm run recompute:dev --workspace @argcis/risk-worker --",
+    "dev": "concurrently \"npm run dev:worker\" \"npm run dev:web\"",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },

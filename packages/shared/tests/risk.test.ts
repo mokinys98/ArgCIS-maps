@@ -4,6 +4,7 @@ import {
   FORECAST_SEGMENT_HOURS,
   aggregateRiskSummaries,
   buildForecastTimeline,
+  demoCoordinateRiskTimeline,
   demoFrame,
   demoHex,
   demoTimeline,
@@ -84,6 +85,15 @@ describe("risk logic", () => {
     expect(demoFrame(timeline[0]).layers.length).toBeGreaterThan(0);
     expect(demoHex(timeline[0]).cells.length).toBeGreaterThan(0);
     expect(demoHex(timeline[0]).outline_cells.length).toBeGreaterThan(0);
+  });
+
+  it("builds coordinate risk timeline for demo data", () => {
+    const response = demoCoordinateRiskTimeline(54.71, 25.14);
+
+    expect(response.h3_index).toBe("demo-hex-1");
+    expect(response.available_times).toHaveLength(FORECAST_SEGMENT_COUNT);
+    expect(response.cells).toHaveLength(FORECAST_SEGMENT_COUNT);
+    expect(response.cells.every((cell) => cell.h3_index === "demo-hex-1")).toBe(true);
   });
 
   it("builds 56 segment timeline for 7 day horizon", () => {

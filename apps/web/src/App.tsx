@@ -18,7 +18,8 @@ import {
   useEffect,
   useEffectEvent,
   useState,
-  useDeferredValue
+  useDeferredValue,
+  useRef
 } from "react";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { LayerPanel, type LayerState } from "./components/LayerPanel";
@@ -59,6 +60,8 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [draftName, setDraftName] = useState("");
   const [uiError, setUiError] = useState<string | null>(null);
+  const mapUpdateResolverRef = useRef<(() => void) | null>(null);
+  const isPlayingRef = useRef(false);
 
   const visibleLayerIds = layers
     .filter((layer) => layerState[layer.id]?.visible)
@@ -193,12 +196,39 @@ export default function App() {
       return;
     }
 
-    const timer = window.setInterval(() => {
-      tickPlayback();
-    }, 850);
+    let cancelled = false;
+    isPlayingRef.current = true;
+
+    const waitForMapUpdate = (timeoutMs = 2000) =>
+      new Promise<void>((resolve) => {
+        mapUpdateResolverRef.current = () => {
+          mapUpdateResolverRef.current = null;
+          resolve();
+        };
+        setTimeout(() => {
+          if (mapUpdateResolverRef.current) {
+            mapUpdateResolverRef.current = null;
+            resolve();
+          }
+        }, timeoutMs);
+      });
+
+    (async () => {
+      while (!cancelled && isPlayingRef.current) {
+        tickPlayback();
+        // wait for map to update (or timeout) before advancing again
+        // give the map a short render window
+        // eslint-disable-next-line no-await-in-loop
+        await waitForMapUpdate(2000);
+        // slight pause between frames
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    })();
 
     return () => {
-      window.clearInterval(timer);
+      cancelled = true;
+      isPlayingRef.current = false;
     };
   }, [isPlaying, tickPlayback]);
 
@@ -322,6 +352,11 @@ export default function App() {
           hex={hex}
           layerState={layerState}
           onBoundsChange={setBbox}
+          onLayersUpdated={() => {
+            if (mapUpdateResolverRef.current) {
+              mapUpdateResolverRef.current();
+            }
+          }}
         />
       </main>
     </div>

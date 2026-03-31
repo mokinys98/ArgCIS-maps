@@ -7,6 +7,7 @@ import {
   FORECAST_SEGMENT_HOURS
 } from "./time";
 import type {
+  CoordinateRiskTimelineResponse,
   ExerciseActivity,
   ExerciseGeometry,
   FrameLayerData,
@@ -306,5 +307,37 @@ export function demoHex(time: string): MapHexResponse {
     time,
     cells,
     outline_cells
+  };
+}
+
+export function demoCoordinateRiskTimeline(
+  latitude: number,
+  longitude: number
+): CoordinateRiskTimelineResponse {
+  const availableTimes = demoTimeline();
+  const referenceCells = demoHex(availableTimes[0]!).cells;
+  const matchedCell = referenceCells
+    .map((cell) => ({
+      cell,
+      distance:
+        Math.abs(cell.center[0] - longitude) + Math.abs(cell.center[1] - latitude)
+    }))
+    .sort((left, right) => left.distance - right.distance)[0]?.cell;
+
+  const h3Index = matchedCell?.h3_index ?? null;
+  const cells = h3Index
+    ? availableTimes
+        .map(
+          (time) => demoHex(time).cells.find((cell) => cell.h3_index === h3Index) ?? null
+        )
+        .filter((cell): cell is RiskHexCell => cell !== null)
+    : [];
+
+  return {
+    latitude,
+    longitude,
+    h3_index: h3Index,
+    available_times: availableTimes,
+    cells
   };
 }

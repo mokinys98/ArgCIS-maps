@@ -6,8 +6,8 @@ import type {
 } from "./types";
 
 const HEX_AGGREGATION_THRESHOLDS = {
-  redThresholdScore: 70,
-  yellowThresholdScore: 35,
+  redThresholdScore: 85,
+  yellowThresholdScore: 55,
   averageWeight: 0.6,
   severeShareWeight: 0.25,
   maxPointScoreWeight: 0.15,

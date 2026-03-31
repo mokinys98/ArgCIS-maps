@@ -1,10 +1,12 @@
 import {
+  demoCoordinateRiskTimeline,
   demoActivities,
   demoFrame,
   demoHex,
   demoLayerCatalog
 } from "@argcis/shared";
 import type {
+  CoordinateRiskTimelineResponse,
   ExerciseScenario,
   GeoJsonFeatureCollection,
   GeoJsonGeometry,
@@ -16,10 +18,12 @@ import type {
   SavedMapLayer
 } from "@argcis/shared";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { latLngToCell } from "h3-js";
 import type { AppConfig } from "./config";
 import { formatErrorMessage, safeStringify, serializeError } from "./logging";
 import {
   attachRiskToActivities,
+  buildCoordinateRiskResponse,
   buildFrameResponse,
   buildHexResponse,
   buildSyntheticArtifacts,
@@ -175,6 +179,59 @@ export class ArgcisRepository {
     }));
 
     return buildHexResponse(time, cells, bbox);
+  }
+
+  async getRiskByCoordinate(
+    latitude: number,
+    longitude: number
+  ): Promise<CoordinateRiskTimelineResponse> {
+    if (this.config.useDemoData) {
+      return demoCoordinateRiskTimeline(latitude, longitude);
+    }
+
+    const availableTimes = buildTimeline(new Date().toISOString());
+    const h3Index = latLngToCell(latitude, longitude, this.config.h3Resolution);
+
+    const { data, error } = await this.client
+      .from("risk_hex_cells")
+      .select(
+        "h3_index, forecast_time_utc, geometry, center_lng, center_lat, risk_score, signal_count, red_signal_count, yellow_signal_count, confidence_multiplier, risk_level, risk_reasons, recommended_action, summary, raw_metrics"
+      )
+      .eq("h3_index", h3Index)
+      .gte("forecast_time_utc", availableTimes[0]!)
+      .lte("forecast_time_utc", availableTimes.at(-1)!)
+      .order("forecast_time_utc", { ascending: true });
+
+    if (error) {
+      throw error;
+    }
+
+    const cells: RiskHexCellRow[] = (data ?? []).map((row) => ({
+      h3_index: row.h3_index as string,
+      forecast_time_utc: row.forecast_time_utc as string,
+      geometry: row.geometry as RiskHexCellRow["geometry"],
+      center: [row.center_lng as number, row.center_lat as number],
+      center_lng: row.center_lng as number,
+      center_lat: row.center_lat as number,
+      risk_score: row.risk_score as number,
+      signal_count: row.signal_count as number,
+      red_signal_count: row.red_signal_count as number,
+      yellow_signal_count: row.yellow_signal_count as number,
+      confidence_multiplier: Number(row.confidence_multiplier),
+      risk_level: row.risk_level as RiskHexCellRow["risk_level"],
+      risk_reasons: (row.risk_reasons as string[]) ?? [],
+      recommended_action: row.recommended_action as RiskHexCellRow["recommended_action"],
+      risk_summary: row.summary as string,
+      raw_metrics: ((row.raw_metrics as JsonObject | null) ?? {}) as JsonObject
+    }));
+
+    return buildCoordinateRiskResponse(
+      latitude,
+      longitude,
+      cells,
+      availableTimes,
+      h3Index
+    );
   }
 
   async debugForecastTime(time: string) {

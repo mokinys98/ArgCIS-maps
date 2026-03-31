@@ -19,6 +19,7 @@ interface MapCanvasProps {
   hex: MapHexResponse | null;
   layerState: Record<string, LayerState>;
   onBoundsChange(bbox: string): void;
+  onLayersUpdated?: () => void;
 }
 
 export function MapCanvas({
@@ -26,7 +27,8 @@ export function MapCanvas({
   frameLayers,
   hex,
   layerState,
-  onBoundsChange
+  onBoundsChange,
+  onLayersUpdated
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -95,6 +97,36 @@ export function MapCanvas({
         zoom: mapZoom
       })
     });
+
+    // Notify parent that layers were updated. Prefer deck.gl's
+    // onAfterRender if available so callers wait for a finished render.
+    if (typeof onLayersUpdated === "function") {
+      const deck = (overlay as any).deck ?? overlayRef.current?.deck;
+      if (deck && typeof deck.setProps === "function") {
+        const oneTime = () => {
+          try {
+            onLayersUpdated();
+          } finally {
+            try {
+              // remove the handler after first run
+              deck.setProps({ onAfterRender: undefined });
+            } catch (_) {
+              // ignore
+            }
+          }
+        };
+
+        try {
+          deck.setProps({ onAfterRender: oneTime });
+        } catch (_) {
+          // fallback if deck doesn't accept setProps here
+          requestAnimationFrame(() => onLayersUpdated());
+        }
+      } else {
+        // last-resort fallback: next animation frame
+        requestAnimationFrame(() => onLayersUpdated());
+      }
+    }
   }, [hex, layerState, layers, frameLayers, mapZoom]);
 
   return <div className="map-canvas" ref={containerRef} />;

@@ -9,6 +9,7 @@ import {
 } from "@argcis/shared";
 import type {
   BBox,
+  CoordinateRiskTimelineResponse,
   ExerciseActivity,
   H3OutlineCell,
   GeoJsonFeature,
@@ -329,6 +330,28 @@ export function buildHexResponse(
     time,
     cells: filtered.map(({ center_lat: _lat, center_lng: _lng, ...rest }) => rest),
     outline_cells
+  };
+}
+
+export function buildCoordinateRiskResponse(
+  latitude: number,
+  longitude: number,
+  cells: RiskHexCellRow[],
+  availableTimes: string[],
+  h3Index: string | null
+): CoordinateRiskTimelineResponse {
+  return {
+    latitude,
+    longitude,
+    h3_index: h3Index,
+    available_times: availableTimes,
+    cells: [...cells]
+      .sort(
+        (left, right) =>
+          new Date(left.forecast_time_utc).getTime() -
+          new Date(right.forecast_time_utc).getTime()
+      )
+      .map(({ center_lat: _lat, center_lng: _lng, ...rest }) => rest)
   };
 }
 

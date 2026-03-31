@@ -59,6 +59,36 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return jsonResponse(config, await repository.getHex(time, bbox), 200, requestOrigin);
     }
 
+    if (request.method === "GET" && url.pathname === "/api/risk/coordinate") {
+      const latitude = Number(url.searchParams.get("lat"));
+      const longitude = Number(
+        url.searchParams.get("lng") ?? url.searchParams.get("lon")
+      );
+
+      if (
+        !Number.isFinite(latitude) ||
+        !Number.isFinite(longitude) ||
+        latitude < -90 ||
+        latitude > 90 ||
+        longitude < -180 ||
+        longitude > 180
+      ) {
+        return jsonResponse(
+          config,
+          { error: "Valid query params lat and lng (or lon) are required." },
+          400,
+          requestOrigin
+        );
+      }
+
+      return jsonResponse(
+        config,
+        await repository.getRiskByCoordinate(latitude, longitude),
+        200,
+        requestOrigin
+      );
+    }
+
     if (request.method === "GET" && url.pathname === "/api/internal/debug/forecast") {
       const time = url.searchParams.get("time")
         ? roundToNearestForecastSegment(url.searchParams.get("time")!)

@@ -12,6 +12,21 @@
                 "<node_internals>/**"
             ],
             "program": "${file}"
+        },
+        {
+            "type": "node-terminal",
+            "request": "launch",
+            "name": "Risk Worker Recompute",
+            "command": "npm run recompute:dev -- -Time \"${input:recomputeTime}\"",
+            "cwd": "${workspaceFolder}"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "recomputeTime",
+            "type": "promptString",
+            "description": "UTC laikas recompute kvietimui. Palik tuscia, jei nori naudoti dabartini UTC laika.",
+            "default": ""
         }
     ]
 }

@@ -148,6 +148,14 @@ export interface MapHexResponse {
   outline_cells: H3OutlineCell[];
 }
 
+export interface CoordinateRiskTimelineResponse {
+  latitude: number;
+  longitude: number;
+  h3_index: string | null;
+  available_times: string[];
+  cells: RiskHexCell[];
+}
+
 export interface ExerciseScenario {
   id: string;
   name: string;

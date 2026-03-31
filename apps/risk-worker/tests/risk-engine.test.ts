@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { RawSignalRecord } from "@argcis/shared";
 import {
   attachRiskToActivities,
+  buildCoordinateRiskResponse,
   buildFrameResponse,
   buildHexResponse,
   buildSyntheticArtifacts,
@@ -112,6 +113,27 @@ describe("risk engine", () => {
     expect(frame.layers).toHaveLength(2);
     expect(hex.cells.length).toBeGreaterThan(0);
     expect(hex.outline_cells).toHaveLength(hex.cells.length);
+  });
+
+  it("builds coordinate timeline API shape", () => {
+    const timeline = buildTimeline("2026-03-07T10:31:00.000Z");
+    const artifacts = buildSyntheticArtifacts(
+      signals,
+      "2026-03-07T00:00:00.000Z",
+      7,
+      timeline
+    );
+    const response = buildCoordinateRiskResponse(
+      54.6872,
+      25.2797,
+      artifacts.riskHexCells,
+      timeline,
+      artifacts.riskHexCells[0]?.h3_index ?? null
+    );
+
+    expect(response.available_times).toHaveLength(56);
+    expect(response.cells).toHaveLength(artifacts.riskHexCells.length);
+    expect(response.h3_index).toBeTruthy();
   });
 
   it("adds activity-risk layer into frame response when activities have geometry", () => {
