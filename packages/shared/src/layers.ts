@@ -14,7 +14,7 @@ export const LAYER_CATALOG: LayerDefinition[] = [
   {
     id: "road-weather-points",
     name: "Keliu oro taskai",
-    description: "Momentines keliu salygos pagal artimiausia 3 val. segmenta.",
+    description: "Momentines keliu salygos 24 valandu horizonte kas 1 valanda.",
     kind: "raw",
     render_type: "circle",
     default_visible: true,

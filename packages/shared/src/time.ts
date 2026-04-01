@@ -1,24 +1,39 @@
-export const FORECAST_HORIZON_DAYS = 7;
-export const FORECAST_SEGMENT_HOURS = 3;
+export const FORECAST_HORIZON_DAYS = 1;
+export const FORECAST_HORIZON_HOURS = FORECAST_HORIZON_DAYS * 24;
+export const FORECAST_SHORT_TERM_HOURS = 24;
+export const FORECAST_SHORT_TERM_SEGMENT_HOURS = 1;
+export const FORECAST_LONG_TERM_SEGMENT_HOURS = FORECAST_SHORT_TERM_SEGMENT_HOURS;
+export const FORECAST_LONG_TERM_START_HOURS = FORECAST_SHORT_TERM_HOURS;
+export const FORECAST_LAST_TIMELINE_OFFSET_HOURS = FORECAST_HORIZON_HOURS;
+export const FORECAST_SEGMENT_HOURS = FORECAST_SHORT_TERM_SEGMENT_HOURS;
 export const FORECAST_SEGMENT_COUNT =
-  (FORECAST_HORIZON_DAYS * 24) / FORECAST_SEGMENT_HOURS;
+  FORECAST_HORIZON_HOURS / FORECAST_SEGMENT_HOURS + 1;
 
-const SEGMENT_MS = FORECAST_SEGMENT_HOURS * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const SHORT_TERM_SEGMENT_MS = FORECAST_SHORT_TERM_SEGMENT_HOURS * HOUR_MS;
 
-export function floorToForecastSegment(input: Date | string): string {
+export function floorToForecastHour(input: Date | string): string {
   const date = typeof input === "string" ? new Date(input) : new Date(input);
   const time = date.getTime();
-  return new Date(Math.floor(time / SEGMENT_MS) * SEGMENT_MS).toISOString();
+  return new Date(Math.floor(time / HOUR_MS) * HOUR_MS).toISOString();
+}
+
+export function floorToForecastSegment(input: Date | string): string {
+  return floorToForecastHour(input);
+}
+
+export function roundToNearestForecastHour(input: Date | string): string {
+  const date = typeof input === "string" ? new Date(input) : new Date(input);
+  const time = date.getTime();
+  return new Date(Math.round(time / HOUR_MS) * HOUR_MS).toISOString();
 }
 
 export function roundToNearestForecastSegment(input: Date | string): string {
-  const date = typeof input === "string" ? new Date(input) : new Date(input);
-  const time = date.getTime();
-  return new Date(Math.round(time / SEGMENT_MS) * SEGMENT_MS).toISOString();
+  return roundToNearestForecastHour(input);
 }
 
 export function shiftForecastHours(iso: string, hours: number): string {
-  return new Date(new Date(iso).getTime() + hours * 60 * 60 * 1000).toISOString();
+  return new Date(new Date(iso).getTime() + hours * HOUR_MS).toISOString();
 }
 
 export function findClosestForecastTime(
@@ -56,9 +71,38 @@ export function findClosestForecastTime(
   return closest;
 }
 
-export function buildForecastTimeline(startIso: string): string[] {
-  const start = new Date(floorToForecastSegment(startIso));
-  return Array.from({ length: FORECAST_SEGMENT_COUNT }, (_, index) =>
-    new Date(start.getTime() + index * SEGMENT_MS).toISOString()
+export function forecastOffsetHours(anchorIso: string, input: Date | string): number {
+  const anchorTime = new Date(anchorIso).getTime();
+  const date = typeof input === "string" ? new Date(input) : new Date(input);
+  return (date.getTime() - anchorTime) / HOUR_MS;
+}
+
+export function isShortTermForecastTime(
+  anchorIso: string,
+  input: Date | string
+): boolean {
+  const offsetHours = forecastOffsetHours(anchorIso, input);
+  return Number.isInteger(offsetHours) &&
+    offsetHours >= 0 &&
+    offsetHours <= FORECAST_SHORT_TERM_HOURS;
+}
+
+export function isLongTermForecastTime(
+  anchorIso: string,
+  input: Date | string
+): boolean {
+  return false;
+}
+
+export function buildShortTermForecastTimeline(startIso: string): string[] {
+  const start = new Date(floorToForecastHour(startIso));
+  return Array.from(
+    { length: FORECAST_SHORT_TERM_HOURS / FORECAST_SHORT_TERM_SEGMENT_HOURS + 1 },
+    (_, index) =>
+      new Date(start.getTime() + index * SHORT_TERM_SEGMENT_MS).toISOString()
   );
+}
+
+export function buildForecastTimeline(startIso: string): string[] {
+  return buildShortTermForecastTimeline(startIso);
 }

@@ -4,7 +4,7 @@ import {
 import { aggregateRiskSummaries, evaluateRisk } from "./risk";
 import {
   buildForecastTimeline,
-  FORECAST_SEGMENT_HOURS
+  forecastOffsetHours
 } from "./time";
 import type {
   CoordinateRiskTimelineResponse,
@@ -25,7 +25,7 @@ const START = new Date("2026-03-07T00:00:00.000Z");
 
 function atSegment(offset: number): string {
   return new Date(
-    START.getTime() + offset * FORECAST_SEGMENT_HOURS * 60 * 60 * 1000
+    START.getTime() + offset * 60 * 60 * 1000
   ).toISOString();
 }
 
@@ -66,17 +66,22 @@ function makePointFeature(
   };
 }
 
-function buildMetrics(hourOffset: number, variant: number): RawSignalMetrics {
+function buildMeteoMetrics(hourOffset: number, variant: number): RawSignalMetrics {
   return {
     wind_speed_ms: 6 + variant,
     wind_gust_ms: 10 + variant * 3 + (hourOffset % 5),
     visibility_m: 1600 - variant * 180 - (hourOffset % 4) * 120,
     thunder_probability: ((hourOffset + variant) % 6) * 15,
     precipitation_mm: ((hourOffset + variant) % 4) * 4,
-    road_ice: variant === 2 && hourOffset % 9 === 0,
-    road_restriction: variant === 3 && hourOffset % 7 === 0,
-    surface_state: variant === 2 ? "wet" : "dry",
+    surface_state: hourOffset % 2 === 0 ? "cloudy" : "clear",
     air_temperature_c: 3 + variant - (hourOffset % 6)
+  };
+}
+
+function buildRoadMetrics(hourOffset: number, variant: number): RawSignalMetrics {
+  return {
+    road_ice: variant === 2 && hourOffset % 9 === 0,
+    road_restriction: variant === 3 && hourOffset % 7 === 0
   };
 }
 
@@ -141,23 +146,20 @@ export function demoGeometries(): ExerciseGeometry[] {
 }
 
 function buildFrameLayerData(time: string): FrameLayerData[] {
-  const segmentOffset = Math.floor(
-    (new Date(time).getTime() - START.getTime()) /
-      (FORECAST_SEGMENT_HOURS * 60 * 60 * 1000)
-  );
+  const hourOffset = Math.round(forecastOffsetHours(START.toISOString(), time));
 
   const meteoPoints: GeoJsonFeatureCollection = {
     type: "FeatureCollection",
     features: [
       makePointFeature("meteo-1", [25.2797, 54.6872], {
         label: "Vilnius",
-        temperature: 4 + (segmentOffset % 4),
-        wind_gust_ms: 11 + (segmentOffset % 6)
+        temperature: 4 + (hourOffset % 4),
+        wind_gust_ms: 11 + (hourOffset % 6)
       }),
       makePointFeature("meteo-2", [23.8813, 54.8985], {
         label: "Kaunas",
-        temperature: 3 + (segmentOffset % 3),
-        wind_gust_ms: 13 + (segmentOffset % 5)
+        temperature: 3 + (hourOffset % 3),
+        wind_gust_ms: 13 + (hourOffset % 5)
       })
     ]
   };
@@ -167,13 +169,13 @@ function buildFrameLayerData(time: string): FrameLayerData[] {
     features: [
       makePointFeature("road-1", [25.0, 54.71], {
         label: "A1 ruozo stotis",
-        road_ice: segmentOffset % 3 === 0,
-        restriction: segmentOffset % 5 === 0
+        road_ice: hourOffset % 3 === 0,
+        restriction: hourOffset % 5 === 0
       }),
       makePointFeature("road-2", [24.4, 55.05], {
         label: "Panevezio kryptis",
         road_ice: false,
-        restriction: segmentOffset % 4 === 0
+        restriction: hourOffset % 4 === 0
       })
     ]
   };
@@ -181,7 +183,7 @@ function buildFrameLayerData(time: string): FrameLayerData[] {
   const alertPoints: GeoJsonFeatureCollection = {
     type: "FeatureCollection",
     features:
-      segmentOffset % 2 === 0
+      hourOffset % 2 === 0
         ? [
             makePointFeature("alert-1", [24.95, 54.73], {
               label: "Eismo apribojimas",
@@ -204,7 +206,7 @@ function buildFrameLayerData(time: string): FrameLayerData[] {
     }))
   };
 
-  return [
+  const layers: FrameLayerData[] = [
     {
       layer_id: "meteo-forecast-points",
       layer_name: "Meteo forecast taskai",
@@ -249,6 +251,8 @@ function buildFrameLayerData(time: string): FrameLayerData[] {
       }
     }
   ];
+
+  return layers;
 }
 
 export function demoFrame(time: string): MapFrameResponse {
@@ -261,10 +265,12 @@ export function demoFrame(time: string): MapFrameResponse {
 }
 
 export function demoHex(time: string): MapHexResponse {
-  const segmentOffset = Math.floor(
-    (new Date(time).getTime() - START.getTime()) /
-      (FORECAST_SEGMENT_HOURS * 60 * 60 * 1000)
-  );
+  const hourOffset = Math.round(forecastOffsetHours(START.toISOString(), time));
+  const meteoOne = buildMeteoMetrics(hourOffset, 1);
+  const meteoTwo = buildMeteoMetrics(hourOffset, 2);
+  const meteoThree = buildMeteoMetrics(hourOffset, 3);
+  const roadTwo = buildRoadMetrics(hourOffset, 2);
+  const roadThree = buildRoadMetrics(hourOffset, 3);
 
   const cells: RiskHexCell[] = [
     {
@@ -272,26 +278,29 @@ export function demoHex(time: string): MapHexResponse {
       forecast_time_utc: time,
       geometry: makeHexagon(25.14, 54.71),
       center: [25.14, 54.71],
-      raw_metrics: buildMetrics(segmentOffset, 1),
-      ...evaluateRisk(buildMetrics(segmentOffset, 1))
+      raw_metrics: meteoOne,
+      ...evaluateRisk(meteoOne)
     },
     {
       h3_index: "demo-hex-2",
       forecast_time_utc: time,
       geometry: makeHexagon(24.78, 54.85),
       center: [24.78, 54.85],
-      raw_metrics: buildMetrics(segmentOffset, 2),
-      ...evaluateRisk(buildMetrics(segmentOffset, 2))
+      raw_metrics: { ...meteoTwo, ...roadTwo },
+      ...aggregateRiskSummaries([
+        evaluateRisk(meteoTwo),
+        evaluateRisk(roadTwo)
+      ])
     },
     {
       h3_index: "demo-hex-3",
       forecast_time_utc: time,
       geometry: makeHexagon(25.48, 54.88),
       center: [25.48, 54.88],
-      raw_metrics: buildMetrics(segmentOffset, 3),
+      raw_metrics: { ...meteoThree, ...roadThree },
       ...aggregateRiskSummaries([
-        evaluateRisk(buildMetrics(segmentOffset, 3)),
-        evaluateRisk({ road_restriction: segmentOffset % 4 === 0 })
+        evaluateRisk(meteoThree),
+        evaluateRisk(roadThree)
       ])
     }
   ];

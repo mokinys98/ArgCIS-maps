@@ -1,11 +1,12 @@
 import {
-  FORECAST_SEGMENT_HOURS,
   LAYER_CATALOG,
   aggregateRiskSummaries,
   buildForecastTimeline,
   evaluateRisk,
-  findClosestForecastTime,
-  roundToNearestForecastSegment
+  FORECAST_SHORT_TERM_SEGMENT_HOURS,
+  floorToForecastHour,
+  isShortTermForecastTime,
+  roundToNearestForecastHour
 } from "@argcis/shared";
 import type {
   BBox,
@@ -75,11 +76,33 @@ export function buildTimeline(startIso: string): string[] {
 }
 
 export function normalizeSignalToSegment(
-  signal: RawSignalRecord
-): RawSignalRecord {
+  signal: RawSignalRecord,
+  generatedAt: string = signal.forecast_time_utc,
+  timeline: string[] = buildForecastTimeline(generatedAt)
+): RawSignalRecord | null {
+  const normalizedAnchor = floorToForecastHour(generatedAt);
+  const normalizedSourceTime = new Date(signal.forecast_time_utc).toISOString();
+  const timelineSet = new Set(timeline);
+
+  if (signal.source === "meteo") {
+    if (!timelineSet.has(normalizedSourceTime)) {
+      return null;
+    }
+
+    return {
+      ...signal,
+      forecast_time_utc: normalizedSourceTime
+    };
+  }
+
+  const mappedTime = roundToNearestForecastHour(normalizedSourceTime);
+  if (!timelineSet.has(mappedTime) || !isShortTermForecastTime(normalizedAnchor, mappedTime)) {
+    return null;
+  }
+
   return {
     ...signal,
-    forecast_time_utc: roundToNearestForecastSegment(signal.forecast_time_utc)
+    forecast_time_utc: mappedTime
   };
 }
 
@@ -87,14 +110,9 @@ export function buildSyntheticArtifacts(
   signals: RawSignalRecord[],
   generatedAt: string,
   resolution: number,
-  timeline: string[] = Array.from(
-    new Set(signals.map((item) => roundToNearestForecastSegment(item.forecast_time_utc)))
-  ).sort()
+  timeline: string[] = buildForecastTimeline(generatedAt)
 ): SyntheticArtifacts {
-  const normalizedSignals = projectSignalsAcrossTimeline(
-    signals.map(normalizeSignalToSegment),
-    timeline
-  );
+  const normalizedSignals = alignSignalsToTimeline(signals, generatedAt, timeline);
   const availableTimes = timeline;
 
   const rawRows: ForecastFrameRow[] = normalizedSignals.map((signal) => {
@@ -176,53 +194,37 @@ export function buildSyntheticArtifacts(
   };
 }
 
-function projectSignalsAcrossTimeline(
+function alignSignalsToTimeline(
   signals: RawSignalRecord[],
+  generatedAt: string,
   timeline: string[]
 ): RawSignalRecord[] {
   if (signals.length === 0 || timeline.length === 0) {
     return signals;
   }
 
-  const series = new Map<string, RawSignalRecord[]>();
-  for (const signal of signals) {
-    const key = buildSignalSeriesKey(signal);
-    const current = series.get(key) ?? [];
-    current.push(signal);
-    series.set(key, current);
-  }
+  const dedupedSignals = new Map<string, RawSignalRecord>();
+  const sortedSignals = [...signals].sort(
+    (left, right) =>
+      new Date(left.forecast_time_utc).getTime() -
+      new Date(right.forecast_time_utc).getTime()
+  );
 
-  const projectedSignals: RawSignalRecord[] = [];
-  for (const signalSeries of series.values()) {
-    const byTime = new Map<string, RawSignalRecord>();
-    for (const signal of signalSeries) {
-      byTime.set(signal.forecast_time_utc, signal);
+  for (const signal of sortedSignals) {
+    const normalizedSignal = normalizeSignalToSegment(signal, generatedAt, timeline);
+    if (!normalizedSignal) {
+      continue;
     }
 
-    const seriesTimes = Array.from(byTime.keys()).sort();
-    for (const forecastTime of timeline) {
-      const matchedTime =
-        byTime.has(forecastTime)
-          ? forecastTime
-          : findClosestForecastTime(seriesTimes, forecastTime);
-
-      if (!matchedTime) {
-        continue;
-      }
-
-      const sourceSignal = byTime.get(matchedTime);
-      if (!sourceSignal) {
-        continue;
-      }
-
-      projectedSignals.push({
-        ...sourceSignal,
-        forecast_time_utc: forecastTime
-      });
-    }
+    const key = `${buildSignalSeriesKey(normalizedSignal)}::${normalizedSignal.forecast_time_utc}`;
+    dedupedSignals.set(key, normalizedSignal);
   }
 
-  return projectedSignals;
+  return Array.from(dedupedSignals.values()).sort(
+    (left, right) =>
+      new Date(left.forecast_time_utc).getTime() -
+      new Date(right.forecast_time_utc).getTime()
+  );
 }
 
 function buildSignalSeriesKey(signal: RawSignalRecord): string {
@@ -462,7 +464,7 @@ export function expandSignalWindow(
   startIso: string,
   endIso: string
 ): { fetchStartIso: string; fetchEndIso: string } {
-  const halfSegmentMs = (FORECAST_SEGMENT_HOURS * 60 * 60 * 1000) / 2;
+  const halfSegmentMs = (FORECAST_SHORT_TERM_SEGMENT_HOURS * 60 * 60 * 1000) / 2;
   return {
     fetchStartIso: new Date(new Date(startIso).getTime() - halfSegmentMs).toISOString(),
     fetchEndIso: new Date(new Date(endIso).getTime() + halfSegmentMs).toISOString()

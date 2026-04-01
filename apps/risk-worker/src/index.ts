@@ -1,4 +1,3 @@
-import { roundToNearestForecastSegment } from "@argcis/shared";
 import { floorToHour, getConfig, requireSupabase, type Env } from "./config";
 import { authenticateRequest } from "./auth";
 import {
@@ -45,7 +44,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
     if (request.method === "GET" && url.pathname === "/api/map/frame") {
       const time = url.searchParams.get("time")
-        ? roundToNearestForecastSegment(url.searchParams.get("time")!)
+        ? normalizeRequestTime(url.searchParams.get("time")!)
         : floorToHour(new Date());
       const layers = parseLayerIds(url.searchParams.get("layers"));
       return jsonResponse(config, await repository.getFrame(time, layers), 200, requestOrigin);
@@ -53,7 +52,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
     if (request.method === "GET" && url.pathname === "/api/map/hex") {
       const time = url.searchParams.get("time")
-        ? roundToNearestForecastSegment(url.searchParams.get("time")!)
+        ? normalizeRequestTime(url.searchParams.get("time")!)
         : floorToHour(new Date());
       const bbox = parseBbox(url.searchParams.get("bbox"));
       return jsonResponse(config, await repository.getHex(time, bbox), 200, requestOrigin);
@@ -91,7 +90,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
     if (request.method === "GET" && url.pathname === "/api/internal/debug/forecast") {
       const time = url.searchParams.get("time")
-        ? roundToNearestForecastSegment(url.searchParams.get("time")!)
+        ? normalizeRequestTime(url.searchParams.get("time")!)
         : floorToHour(new Date());
       return jsonResponse(
         config,
@@ -132,7 +131,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
     if (request.method === "GET" && url.pathname === "/api/exercise-activities") {
       const time = url.searchParams.get("time")
-        ? roundToNearestForecastSegment(url.searchParams.get("time")!)
+        ? normalizeRequestTime(url.searchParams.get("time")!)
         : floorToHour(new Date());
       return jsonResponse(
         config,
@@ -194,7 +193,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
     if (request.method === "POST" && url.pathname === "/api/internal/recompute") {
       const recomputeTime = url.searchParams.get("time")
-        ? roundToNearestForecastSegment(url.searchParams.get("time")!)
+        ? normalizeRequestTime(url.searchParams.get("time")!)
         : floorToHour(new Date());
       console.info(
         `[api.internal.recompute] ${safeStringify({
@@ -240,6 +239,15 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       requestOrigin
     );
   }
+}
+
+function normalizeRequestTime(input: string): string {
+  const parsed = new Date(input);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error("Invalid time query param.");
+  }
+
+  return parsed.toISOString();
 }
 
 export default {

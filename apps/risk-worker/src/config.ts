@@ -1,4 +1,4 @@
-import { floorToForecastSegment } from "@argcis/shared";
+import { floorToForecastHour } from "@argcis/shared";
 
 export interface Env {
   SUPABASE_URL?: string;
@@ -62,5 +62,5 @@ export function requireSupabase(config: AppConfig): void {
 }
 
 export function floorToHour(date: Date): string {
-  return floorToForecastSegment(date);
+  return floorToForecastHour(date);
 }

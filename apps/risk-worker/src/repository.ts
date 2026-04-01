@@ -3,7 +3,12 @@ import {
   demoActivities,
   demoFrame,
   demoHex,
-  demoLayerCatalog
+  demoLayerCatalog,
+  FORECAST_SHORT_TERM_HOURS,
+  findClosestForecastTime,
+  floorToForecastHour,
+  isShortTermForecastTime,
+  shiftForecastHours
 } from "@argcis/shared";
 import type {
   CoordinateRiskTimelineResponse,
@@ -33,6 +38,10 @@ import {
   type ForecastFrameRow,
   type RiskHexCellRow
 } from "./risk-engine";
+import {
+  selectLatestHistoricalMeteoRuns,
+  type MeteoForecastRunSelection
+} from "./meteo-history";
 
 interface CreateExerciseInput {
   name: string;
@@ -89,9 +98,28 @@ interface RawFrameDebugRow {
   location_name: string;
 }
 
+interface MeteoForecastPointRow {
+  run_id: string;
+  forecast_time_utc: string;
+  air_temp: number | null;
+  wind_speed: number | null;
+  wind_gust: number | null;
+  total_precipitation: number | null;
+  condition_code: string | null;
+}
+
+interface MeteoPlaceRow {
+  code: string;
+  name: string;
+  lat: number | null;
+  lon: number | null;
+}
+
 const ROAD_POINT_LOOKBACK_HOURS = 12;
 const RAW_FRAME_INSERT_BATCH_SIZE = 500;
 const RISK_HEX_INSERT_BATCH_SIZE = 250;
+const METEO_QUERY_BATCH_SIZE = 200;
+const METEO_RUN_PAGE_SIZE = 1000;
 
 export class ArgcisRepository {
   private readonly client: SupabaseClient;
@@ -120,7 +148,7 @@ export class ArgcisRepository {
     }
 
     const [availableTimes, rawRows, exerciseAreas, activities] = await Promise.all([
-      this.listAvailableTimes(),
+      this.listAvailableTimes(time),
       this.listForecastRows(time, layerIds),
       this.listExerciseAreas(),
       this.listActivitiesAtTime(time)
@@ -189,8 +217,11 @@ export class ArgcisRepository {
       return demoCoordinateRiskTimeline(latitude, longitude);
     }
 
-    const availableTimes = buildTimeline(new Date().toISOString());
+    const storedTimes = await this.listAvailableTimes();
     const h3Index = latLngToCell(latitude, longitude, this.config.h3Resolution);
+    if (storedTimes.length === 0) {
+      return buildCoordinateRiskResponse(latitude, longitude, [], [], h3Index);
+    }
 
     const { data, error } = await this.client
       .from("risk_hex_cells")
@@ -198,8 +229,8 @@ export class ArgcisRepository {
         "h3_index, forecast_time_utc, geometry, center_lng, center_lat, risk_score, signal_count, red_signal_count, yellow_signal_count, confidence_multiplier, risk_level, risk_reasons, recommended_action, summary, raw_metrics"
       )
       .eq("h3_index", h3Index)
-      .gte("forecast_time_utc", availableTimes[0]!)
-      .lte("forecast_time_utc", availableTimes.at(-1)!)
+      .gte("forecast_time_utc", storedTimes[0]!)
+      .lte("forecast_time_utc", storedTimes.at(-1)!)
       .order("forecast_time_utc", { ascending: true });
 
     if (error) {
@@ -229,40 +260,169 @@ export class ArgcisRepository {
       latitude,
       longitude,
       cells,
-      availableTimes,
+      storedTimes,
       h3Index
     );
   }
 
   async debugForecastTime(time: string) {
-    const { fetchStartIso, fetchEndIso } = expandSignalWindow(time, time);
-    const nearbyStart = new Date(new Date(time).getTime() - 12 * 60 * 60 * 1000).toISOString();
-    const nearbyEnd = new Date(new Date(time).getTime() + 12 * 60 * 60 * 1000).toISOString();
+    const timelineContext = await this.resolveTimelineContext(time);
+    const resolvedTime =
+      timelineContext.availableTimes.includes(time)
+        ? time
+        : findClosestForecastTime(timelineContext.availableTimes, time) ?? time;
+    const normalizedAnchor = timelineContext.generatedAt
+      ? floorToForecastHour(timelineContext.generatedAt)
+      : floorToForecastHour(resolvedTime);
+    const isShortTermSlot = isShortTermForecastTime(normalizedAnchor, resolvedTime);
+    const nearbyStart = new Date(
+      new Date(resolvedTime).getTime() - 12 * 60 * 60 * 1000
+    ).toISOString();
+    const nearbyEnd = new Date(
+      new Date(resolvedTime).getTime() + 12 * 60 * 60 * 1000
+    ).toISOString();
+    const sourceNearbyStart = new Date(
+      new Date(resolvedTime).getTime() - 60 * 60 * 1000
+    ).toISOString();
+    const sourceNearbyEnd = new Date(
+      new Date(resolvedTime).getTime() + 60 * 60 * 1000
+    ).toISOString();
 
-    const [meteoSource, roadSource, rawRows, nearbyRawTimes, riskFrame, nearbyRiskTimes] =
-      await Promise.all([
-        this.debugSourceWindow(this.config.meteoSourceView, fetchStartIso, fetchEndIso),
-        this.debugSourceWindow(this.config.roadSourceView, fetchStartIso, fetchEndIso),
-        this.debugRawFrameRows(time),
-        this.debugNearbyTimes("forecast_frames_raw", nearbyStart, nearbyEnd),
-        this.debugRiskFrame(time),
-        this.debugNearbyTimes("risk_frames", nearbyStart, nearbyEnd)
-      ]);
+    const [
+      roadSource,
+      rawRows,
+      nearbyRawTimes,
+      riskFrame,
+      nearbyRiskTimes,
+      renderedFrame,
+      renderedHex
+    ] = await Promise.all([
+      this.debugSourceWindow(this.config.roadSourceView, sourceNearbyStart, sourceNearbyEnd),
+      this.debugRawFrameRows(resolvedTime),
+      this.debugNearbyTimes("forecast_frames_raw", nearbyStart, nearbyEnd),
+      this.debugRiskFrame(resolvedTime),
+      this.debugNearbyTimes("risk_frames", nearbyStart, nearbyEnd),
+      this.getFrame(resolvedTime, []),
+      this.getHex(resolvedTime, null)
+    ]);
 
     const rawByLayer = rawRows.reduce<Record<string, number>>((acc, row) => {
       acc[row.layer_id] = (acc[row.layer_id] ?? 0) + 1;
       return acc;
     }, {});
 
+    const renderedLayerFeatureCounts = renderedFrame.layers.reduce<Record<string, number>>(
+      (acc, layer) => {
+        acc[layer.layer_id] = layer.feature_collection.features.length;
+        return acc;
+      },
+      {}
+    );
+
+    let sourceAnalysis = null;
+
+    if (
+      timelineContext.generatedAt &&
+      timelineContext.availableTimes.length > 0
+    ) {
+      const sourceSignals = await this.fetchSourceSignals(
+        timelineContext.generatedAt,
+        timelineContext.availableTimes[0]!,
+        timelineContext.availableTimes.at(-1)!
+      );
+      const artifacts = buildSyntheticArtifacts(
+        sourceSignals,
+        timelineContext.generatedAt,
+        this.config.h3Resolution,
+        timelineContext.availableTimes
+      );
+      const normalizedResolvedTime = normalizeIsoTimestamp(resolvedTime);
+      const exactSourceSignals = sourceSignals.filter(
+        (signal) => normalizeIsoTimestamp(signal.forecast_time_utc) === normalizedResolvedTime
+      );
+      const exactMeteoSignals = exactSourceSignals.filter(
+        (signal) => signal.layer_id === "meteo-forecast-points"
+      );
+      const nearbySourceSignals = sourceSignals.filter((signal) => {
+        const signalTime = new Date(signal.forecast_time_utc).getTime();
+        return (
+          signalTime >= new Date(sourceNearbyStart).getTime() &&
+          signalTime <= new Date(sourceNearbyEnd).getTime()
+        );
+      });
+      const normalizedRows = artifacts.rawRows.filter(
+        (row) =>
+          normalizeIsoTimestamp(row.forecast_time_utc) === normalizedResolvedTime
+      );
+      const normalizedMeteoRows = normalizedRows.filter(
+        (row) => row.layer_id === "meteo-forecast-points"
+      );
+      const normalizedHexCells = artifacts.riskHexCells.filter(
+        (cell) =>
+          normalizeIsoTimestamp(cell.forecast_time_utc) === normalizedResolvedTime
+      );
+      const storedMeteoRows = rawRows.filter(
+        (row) => row.layer_id === "meteo-forecast-points"
+      );
+      const exactMeteoStations = uniqueStrings(
+        exactMeteoSignals.map((signal) => extractStationKey(signal.id))
+      );
+      const normalizedMeteoStations = uniqueStrings(
+        normalizedMeteoRows.map((row) => extractStationKey(row.source_id))
+      );
+      const storedMeteoStations = uniqueStrings(
+        storedMeteoRows.map((row) => extractStationKey(row.source_id))
+      );
+
+      sourceAnalysis = {
+        source_signal_count_exact: exactSourceSignals.length,
+        source_signal_count_nearby: nearbySourceSignals.length,
+        source_by_layer_exact: countBy(exactSourceSignals, (signal) => signal.layer_id),
+        source_by_layer_nearby: countBy(nearbySourceSignals, (signal) => signal.layer_id),
+        normalized_raw_count: normalizedRows.length,
+        normalized_raw_by_layer: countBy(normalizedRows, (row) => row.layer_id),
+        normalized_hex_count: normalizedHexCells.length,
+        normalized_raw_sample: normalizedRows.slice(0, 12),
+        meteo_station_diff: {
+          exact_fetch_count: exactMeteoStations.length,
+          normalized_count: normalizedMeteoStations.length,
+          stored_count: storedMeteoStations.length,
+          exact_fetch_sample: exactMeteoStations.slice(0, 25),
+          normalized_sample: normalizedMeteoStations.slice(0, 25),
+          stored_sample: storedMeteoStations.slice(0, 25),
+          dropped_before_normalize: diffStrings(exactMeteoStations, normalizedMeteoStations),
+          dropped_before_storage: diffStrings(normalizedMeteoStations, storedMeteoStations),
+          missing_from_storage_vs_fetch: diffStrings(exactMeteoStations, storedMeteoStations)
+        },
+        explanation: buildForecastDebugExplanation({
+          resolvedTime,
+          isShortTermSlot,
+          sourceByLayerNearby: countBy(nearbySourceSignals, (signal) => signal.layer_id),
+          normalizedByLayer: countBy(normalizedRows, (row) => row.layer_id),
+          renderedLayerFeatureCounts
+        })
+      };
+    }
+
     return {
-      time,
-      ingest_window: {
-        start_utc: fetchStartIso,
-        end_utc: fetchEndIso
+      requested_time: time,
+      resolved_time: resolvedTime,
+      timeline: {
+        generated_at: timelineContext.generatedAt,
+        normalized_anchor_utc: normalizedAnchor,
+        start_utc: timelineContext.availableTimes[0] ?? null,
+        end_utc: timelineContext.availableTimes.at(-1) ?? null,
+        segment_count: timelineContext.availableTimes.length,
+        is_short_term_slot: isShortTermSlot
       },
       ingest: {
-        meteo: meteoSource,
         road: roadSource
+      },
+      source_analysis: sourceAnalysis,
+      rendered_output: {
+        layer_feature_counts: renderedLayerFeatureCounts,
+        frame: renderedFrame,
+        hex: renderedHex
       },
       worker_storage: {
         raw_frame_count: rawRows.length,
@@ -591,7 +751,7 @@ export class ArgcisRepository {
         end_utc: end
       });
 
-      const sourceSignals = await this.fetchSourceSignals(start, end);
+      const sourceSignals = await this.fetchSourceSignals(nowIso, start, end);
 
       this.logInfo("recompute.source_signals_fetched", {
         total_count: sourceSignals.length,
@@ -659,18 +819,15 @@ export class ArgcisRepository {
   }
 
   private async fetchSourceSignals(
+    anchor: string,
     start: string,
     end: string
   ): Promise<RawSignalRecord[]> {
-    const { fetchStartIso, fetchEndIso } = expandSignalWindow(start, end);
+    const normalizedAnchor = floorToForecastHour(anchor);
+    const shortTermEnd = shiftForecastHours(normalizedAnchor, FORECAST_SHORT_TERM_HOURS);
+    const { fetchStartIso, fetchEndIso } = expandSignalWindow(normalizedAnchor, shortTermEnd);
     const [meteoRows, roadRows, roadAlertRows] = await Promise.all([
-      this.fetchSignalView(
-        this.config.meteoSourceView,
-        "meteo",
-        "meteo-forecast-points",
-        fetchStartIso,
-        fetchEndIso
-      ),
+      this.fetchHistoricalMeteoSignals(anchor, start, end),
       this.fetchSignalView(
         this.config.roadSourceView,
         "road",
@@ -682,14 +839,206 @@ export class ArgcisRepository {
     ]);
 
     this.logInfo("source_signals.loaded", {
-      fetch_start_utc: fetchStartIso,
-      fetch_end_utc: fetchEndIso,
+      meteo_anchor_utc: anchor,
+      normalized_anchor_utc: normalizedAnchor,
+      meteo_start_utc: start,
+      meteo_end_utc: end,
+      road_fetch_start_utc: fetchStartIso,
+      road_fetch_end_utc: fetchEndIso,
       meteo_count: meteoRows.length,
       road_count: roadRows.length,
       road_alert_count: roadAlertRows.length
     });
 
-    return [...meteoRows, ...roadRows, ...roadAlertRows];
+    return [...meteoRows, ...roadRows, ...roadAlertRows].sort(
+      (left, right) =>
+        new Date(left.forecast_time_utc).getTime() -
+        new Date(right.forecast_time_utc).getTime()
+    );
+  }
+
+  private async fetchHistoricalMeteoSignals(
+    anchor: string,
+    start: string,
+    end: string
+  ): Promise<RawSignalRecord[]> {
+    const selectedRuns = selectLatestHistoricalMeteoRuns(
+      (await this.fetchHistoricalMeteoRuns(anchor)).map((run) => ({
+        id: run.id,
+        place_code: run.place_code,
+        forecast_creation_time_utc: run.forecast_creation_time_utc
+      })),
+      anchor
+    );
+
+    if (selectedRuns.length === 0) {
+      return [];
+    }
+
+    const runIds = selectedRuns.map((run) => run.id);
+    const placeCodes = selectedRuns.map((run) => run.place_code);
+    const runPlaceMap = new Map(selectedRuns.map((run) => [run.id, run.place_code]));
+
+    const [pointData, placeData] = await Promise.all([
+      this.fetchHistoricalMeteoPoints(runIds, start, end, anchor),
+      this.fetchMeteoPlaces(placeCodes)
+    ]);
+
+    const placeMap = new Map(
+      placeData.map((place) => [place.code, place])
+    );
+
+    const mappedSignals: Array<RawSignalRecord | null> = (
+      pointData
+    ).map((point) => {
+        const placeCode = runPlaceMap.get(point.run_id);
+        const place = placeCode ? placeMap.get(placeCode) : null;
+        if (!placeCode || !place || place.lat === null || place.lon === null) {
+          return null;
+        }
+
+        return {
+          id: `${placeCode}:${point.forecast_time_utc}`,
+          source: "meteo" as const,
+          layer_id: "meteo-forecast-points",
+          forecast_time_utc: point.forecast_time_utc,
+          latitude: place.lat,
+          longitude: place.lon,
+          location_name: place.name,
+          metrics: {
+            air_temperature_c: point.air_temp ?? undefined,
+            wind_speed_ms: point.wind_speed ?? undefined,
+            wind_gust_ms: point.wind_gust ?? undefined,
+            visibility_m: undefined,
+            precipitation_mm: point.total_precipitation ?? undefined,
+            thunder_probability:
+              point.condition_code?.toLowerCase().includes("thunder") ||
+              point.condition_code?.toLowerCase().includes("storm")
+                ? 100
+                : undefined,
+            surface_state: point.condition_code ?? undefined
+          }
+        } satisfies RawSignalRecord;
+      });
+
+    return mappedSignals.filter(
+      (signal): signal is RawSignalRecord => signal !== null
+    );
+  }
+
+  private async fetchHistoricalMeteoRuns(
+    anchor: string
+  ): Promise<MeteoForecastRunSelection[]> {
+    const runs: MeteoForecastRunSelection[] = [];
+    let offset = 0;
+
+    while (true) {
+      const { data, error } = await this.client
+        .from("meteo_forecast_runs")
+        .select("id, place_code, forecast_creation_time_utc")
+        .eq("forecast_type", "long-term")
+        .lte("forecast_creation_time_utc", anchor)
+        .order("forecast_creation_time_utc", { ascending: false })
+        .range(offset, offset + METEO_RUN_PAGE_SIZE - 1);
+
+      if (error) {
+        throw this.createContextError(
+          "Failed to fetch historical meteo forecast runs",
+          error,
+          {
+            anchor_utc: anchor,
+            offset,
+            page_size: METEO_RUN_PAGE_SIZE
+          }
+        );
+      }
+
+      const page = (data ?? []) as MeteoForecastRunSelection[];
+      runs.push(...page);
+
+      if (page.length < METEO_RUN_PAGE_SIZE) {
+        break;
+      }
+
+      offset += METEO_RUN_PAGE_SIZE;
+    }
+
+    return runs;
+  }
+
+  private async fetchHistoricalMeteoPoints(
+    runIds: string[],
+    start: string,
+    end: string,
+    anchor: string
+  ): Promise<MeteoForecastPointRow[]> {
+    const batches = chunkArray(runIds, METEO_QUERY_BATCH_SIZE);
+    const points: MeteoForecastPointRow[] = [];
+
+    for (const [index, batch] of batches.entries()) {
+      const { data, error } = await this.client
+        .from("meteo_forecast_points")
+        .select(
+          "run_id, forecast_time_utc, air_temp, wind_speed, wind_gust, total_precipitation, condition_code"
+        )
+        .in("run_id", batch)
+        .gte("forecast_time_utc", start)
+        .lte("forecast_time_utc", end)
+        .order("forecast_time_utc", { ascending: true });
+
+      if (error) {
+        throw this.createContextError(
+          "Failed to fetch historical meteo forecast points",
+          error,
+          {
+            anchor_utc: anchor,
+            start_utc: start,
+            end_utc: end,
+            run_count: runIds.length,
+            batch_index: index + 1,
+            batch_count: batches.length,
+            batch_size: batch.length
+          }
+        );
+      }
+
+      points.push(...((data ?? []) as MeteoForecastPointRow[]));
+    }
+
+    return points.sort(
+      (left, right) =>
+        new Date(left.forecast_time_utc).getTime() -
+        new Date(right.forecast_time_utc).getTime()
+    );
+  }
+
+  private async fetchMeteoPlaces(placeCodes: string[]): Promise<MeteoPlaceRow[]> {
+    const batches = chunkArray(placeCodes, METEO_QUERY_BATCH_SIZE);
+    const places: MeteoPlaceRow[] = [];
+
+    for (const [index, batch] of batches.entries()) {
+      const { data, error } = await this.client
+        .from("meteo_places")
+        .select("code, name, lat, lon")
+        .in("code", batch);
+
+      if (error) {
+        throw this.createContextError(
+          "Failed to fetch meteo place metadata",
+          error,
+          {
+            place_count: placeCodes.length,
+            batch_index: index + 1,
+            batch_count: batches.length,
+            batch_size: batch.length
+          }
+        );
+      }
+
+      places.push(...((data ?? []) as MeteoPlaceRow[]));
+    }
+
+    return places;
   }
 
   private async fetchSignalView(
@@ -764,8 +1113,74 @@ export class ArgcisRepository {
     };
   }
 
-  private async listAvailableTimes(): Promise<string[]> {
-    return buildTimeline(new Date().toISOString());
+  private async listAvailableTimes(referenceTime?: string): Promise<string[]> {
+    const timelineContext = await this.resolveTimelineContext(referenceTime);
+    return timelineContext.availableTimes;
+  }
+
+  private async resolveTimelineContext(referenceTime?: string): Promise<{
+    generatedAt: string | null;
+    availableTimes: string[];
+  }> {
+    let generatedAt: string | null = null;
+
+    if (referenceTime) {
+      const { data: exactFrame, error: exactFrameError } = await this.client
+        .from("risk_frames")
+        .select("generated_at")
+        .eq("forecast_time_utc", referenceTime)
+        .maybeSingle();
+
+      if (exactFrameError) {
+        throw exactFrameError;
+      }
+
+      generatedAt = (exactFrame?.generated_at as string | undefined) ?? null;
+    }
+
+    if (!generatedAt) {
+      const { data: latestFrame, error: latestFrameError } = await this.client
+        .from("risk_frames")
+        .select("generated_at")
+        .order("generated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (latestFrameError) {
+        throw latestFrameError;
+      }
+
+      generatedAt = (latestFrame?.generated_at as string | undefined) ?? null;
+    }
+
+    if (!generatedAt) {
+      return {
+        generatedAt: null,
+        availableTimes: buildTimeline(new Date().toISOString())
+      };
+    }
+
+    const { data, error } = await this.client
+      .from("risk_frames")
+      .select("forecast_time_utc")
+      .eq("generated_at", generatedAt)
+      .order("forecast_time_utc", { ascending: true });
+
+    if (error) {
+      throw error;
+    }
+
+    const storedTimes = Array.from(
+      new Set((data ?? []).map((row) => row.forecast_time_utc as string))
+    );
+
+    return {
+      generatedAt,
+      availableTimes:
+        storedTimes.length > 0
+          ? storedTimes
+          : buildTimeline(new Date().toISOString())
+    };
   }
 
   private async debugRawFrameRows(time: string): Promise<RawFrameDebugRow[]> {
@@ -848,10 +1263,23 @@ export class ArgcisRepository {
     }
 
     const exactRows = (data ?? []) as ForecastFrameRow[];
-    const shouldIncludeRoadLayer =
+    const shouldIncludeRoadWeatherLayer =
       layerIds.length === 0 || layerIds.includes("road-weather-points");
+    const shouldIncludeRoadLayers =
+      shouldIncludeRoadWeatherLayer || layerIds.includes("road-alerts");
 
-    if (!shouldIncludeRoadLayer) {
+    if (!shouldIncludeRoadLayers) {
+      return exactRows;
+    }
+
+    const roadAllowed = await this.isShortTermRoadSlot(time);
+    if (!roadAllowed) {
+      return exactRows.filter(
+        (row) => row.layer_id !== "road-weather-points" && row.layer_id !== "road-alerts"
+      );
+    }
+
+    if (!shouldIncludeRoadWeatherLayer) {
       return exactRows;
     }
 
@@ -865,6 +1293,27 @@ export class ArgcisRepository {
     );
 
     return [...rowsWithoutRoad, ...latestRoadRows];
+  }
+
+  private async isShortTermRoadSlot(time: string): Promise<boolean> {
+    const { data, error } = await this.client
+      .from("risk_frames")
+      .select("generated_at")
+      .eq("forecast_time_utc", time)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data?.generated_at) {
+      return false;
+    }
+
+    return isShortTermForecastTime(
+      floorToForecastHour(data.generated_at as string),
+      time
+    );
   }
 
   private async listLatestRoadRowsByStation(time: string): Promise<ForecastFrameRow[]> {
@@ -1353,4 +1802,68 @@ function chunkArray<T>(items: T[], chunkSize: number): T[][] {
   }
 
   return chunks;
+}
+
+function buildForecastDebugExplanation(input: {
+  resolvedTime: string;
+  isShortTermSlot: boolean;
+  sourceByLayerNearby: Record<string, number>;
+  normalizedByLayer: Record<string, number>;
+  renderedLayerFeatureCounts: Record<string, number>;
+}): string[] {
+  const explanations: string[] = [];
+  const nearbyMeteo = input.sourceByLayerNearby["meteo-forecast-points"] ?? 0;
+  const normalizedMeteo = input.normalizedByLayer["meteo-forecast-points"] ?? 0;
+  const normalizedRoadPoints = input.normalizedByLayer["road-weather-points"] ?? 0;
+  const normalizedRoadAlerts = input.normalizedByLayer["road-alerts"] ?? 0;
+  const renderedMeteo = input.renderedLayerFeatureCounts["meteo-forecast-points"] ?? 0;
+
+  if (!input.isShortTermSlot) {
+    explanations.push(
+      "Sis slotas yra po pirmu 24 valandu, todel road signalai samoningai nebedalyvauja nei risk score, nei frame layeriuose."
+    );
+  }
+
+  if (nearbyMeteo > normalizedMeteo) {
+    explanations.push(
+      "Aplink sia valanda meteo source duomenu yra daugiau, bet i layeri patenka tik tie forecast taskai, kuriu laikas tiksliai sutampa su sio slot'o timestamp."
+    );
+  }
+
+  if (renderedMeteo === 0 && nearbyMeteo > 0) {
+    explanations.push(
+      `Melynu tasku mazai arba nera, nes artimi meteo forecast irasai nepataiko tiksliai i ${input.resolvedTime} slota.`
+    );
+  }
+
+  if (input.isShortTermSlot && normalizedRoadPoints + normalizedRoadAlerts === 0) {
+    explanations.push(
+      "Trumpalaikiame lange road source siuo metu nepaliko nei vieno tasko po hourly normalizavimo."
+    );
+  }
+
+  if (explanations.length === 0) {
+    explanations.push(
+      "Layeris apskaiciuotas is source signalu, kurie po laiko normalizavimo liko siam slotui; nearby ir normalized counts virsuje parodo visa grandine."
+    );
+  }
+
+  return explanations;
+}
+
+function extractStationKey(sourceId: string): string {
+  return sourceId.split(":")[0] ?? sourceId;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right));
+}
+
+function diffStrings(left: string[], right: string[]): string[] {
+  const rightSet = new Set(right);
+  return left.filter((value) => !rightSet.has(value)).sort((a, b) => a.localeCompare(b));
+}
+
+function normalizeIsoTimestamp(value: string): string {
+  return new Date(value).toISOString();
 }
