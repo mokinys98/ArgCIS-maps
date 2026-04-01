@@ -187,3 +187,141 @@ describe("repository meteo batching", () => {
     expect(Math.max(...placeBatchSizes)).toBeLessThanOrEqual(200);
   });
 });
+
+describe("repository meteo run selection", () => {
+  it("does not limit historical run lookup to long-term forecast type", async () => {
+    const repository = new ArgcisRepository(createConfig());
+    const seenRunFilters: Record<string, unknown>[] = [];
+
+    class MixedRunQuery {
+      private filters: Record<string, unknown> = {};
+
+      constructor(private readonly table: string) {}
+
+      select(): this {
+        return this;
+      }
+
+      eq(column: string, value: unknown): this {
+        this.filters[column] = value;
+        return this;
+      }
+
+      lte(column: string, value: unknown): this {
+        this.filters[column] = value;
+        return this;
+      }
+
+      gte(column: string, value: unknown): this {
+        this.filters[column] = value;
+        return this;
+      }
+
+      order(): this {
+        return this;
+      }
+
+      range(): this {
+        return this;
+      }
+
+      then<TResult1 = QueryResult<unknown[]>, TResult2 = never>(
+        onfulfilled?:
+          | ((value: QueryResult<unknown[]>) => TResult1 | PromiseLike<TResult1>)
+          | null,
+        onrejected?:
+          | ((reason: unknown) => TResult2 | PromiseLike<TResult2>)
+          | null
+      ): Promise<TResult1 | TResult2> {
+        return this.execute().then(onfulfilled, onrejected);
+      }
+
+      private execute(): Promise<QueryResult<unknown[]>> {
+        if (this.table === "meteo_forecast_runs") {
+          seenRunFilters.push({ ...this.filters });
+          return Promise.resolve({
+            data: [
+              {
+                id: "run-long",
+                place_code: "vilnius",
+                forecast_creation_time_utc: "2026-03-29T05:00:00.000Z"
+              },
+              {
+                id: "run-short",
+                place_code: "vilnius",
+                forecast_creation_time_utc: "2026-03-29T06:00:00.000Z"
+              }
+            ],
+            error: null
+          });
+        }
+
+        if (this.table === "meteo_forecast_points") {
+          const batch = (this.filters.run_id as string[]) ?? [];
+          return Promise.resolve({
+            data: batch.map((runId) => ({
+              run_id: runId,
+              forecast_time_utc: "2026-03-29T06:00:00.000Z",
+              air_temp: runId === "run-short" ? 8 : 2,
+              wind_speed: 3,
+              wind_gust: 5,
+              total_precipitation: 0,
+              condition_code: "cloudy"
+            })),
+            error: null
+          });
+        }
+
+        return Promise.resolve({
+          data: [],
+          error: null
+        });
+      }
+
+      in(column: string, values: string[]): Promise<QueryResult<unknown[]>> | this {
+        this.filters[column] = values;
+
+        if (this.table === "meteo_places") {
+          return Promise.resolve({
+            data: [
+              {
+                code: "vilnius",
+                name: "Vilnius",
+                lat: 54.6872,
+                lon: 25.2797
+              }
+            ],
+            error: null
+          });
+        }
+
+        return this;
+      }
+    }
+
+    class MixedRunClient {
+      from(table: string): MixedRunQuery {
+        return new MixedRunQuery(table);
+      }
+    }
+
+    Object.defineProperty(repository, "client", {
+      value: new MixedRunClient()
+    });
+
+    const signals = await (repository as any).fetchHistoricalMeteoSignals(
+      "2026-03-29T06:30:00.000Z",
+      "2026-03-29T06:00:00.000Z",
+      "2026-03-29T07:00:00.000Z"
+    );
+
+    expect(seenRunFilters).toEqual([
+      {
+        forecast_creation_time_utc: "2026-03-29T06:30:00.000Z"
+      }
+    ]);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.id).toBe("vilnius:2026-03-29T06:00:00.000Z");
+    expect(signals[0]?.metrics.air_temperature_c).toBe(8);
+  });
+});

@@ -115,11 +115,37 @@ interface MeteoPlaceRow {
   lon: number | null;
 }
 
+interface RecomputeArtifactsContext {
+  timeline: string[];
+  sourceSignals: RawSignalRecord[];
+  artifacts: ReturnType<typeof buildSyntheticArtifacts>;
+}
+
+interface RecomputeSegmentLayerCount {
+  layer_id: string;
+  count: number;
+}
+
+interface RecomputeSegmentSummary {
+  forecast_time_utc: string;
+  total_count: number;
+  hex_cell_count: number;
+  layer_counts: RecomputeSegmentLayerCount[];
+}
+
+interface RecomputeSegmentsTableResponse {
+  generated_at: string;
+  segment_count: number;
+  source_signal_count: number;
+  segments: RecomputeSegmentSummary[];
+}
+
 const ROAD_POINT_LOOKBACK_HOURS = 12;
 const RAW_FRAME_INSERT_BATCH_SIZE = 500;
 const RISK_HEX_INSERT_BATCH_SIZE = 250;
 const METEO_QUERY_BATCH_SIZE = 200;
 const METEO_RUN_PAGE_SIZE = 1000;
+const METEO_POINT_PAGE_SIZE = 1000;
 
 export class ArgcisRepository {
   private readonly client: SupabaseClient;
@@ -741,38 +767,7 @@ export class ArgcisRepository {
     }
 
     try {
-      const timeline = buildTimeline(nowIso);
-      const start = timeline[0];
-      const end = timeline[timeline.length - 1];
-
-      this.logInfo("recompute.timeline_built", {
-        segment_count: timeline.length,
-        start_utc: start,
-        end_utc: end
-      });
-
-      const sourceSignals = await this.fetchSourceSignals(nowIso, start, end);
-
-      this.logInfo("recompute.source_signals_fetched", {
-        total_count: sourceSignals.length,
-        by_source: countBy(sourceSignals, (signal) => signal.source),
-        by_layer: countBy(sourceSignals, (signal) => signal.layer_id),
-        earliest_time_utc: sourceSignals[0]?.forecast_time_utc ?? null,
-        latest_time_utc: sourceSignals.at(-1)?.forecast_time_utc ?? null
-      });
-
-      const artifacts = buildSyntheticArtifacts(
-        sourceSignals,
-        nowIso,
-        this.config.h3Resolution,
-        timeline
-      );
-
-      this.logInfo("recompute.artifacts_built", {
-        raw_row_count: artifacts.rawRows.length,
-        risk_frame_count: artifacts.riskFrames.length,
-        risk_hex_count: artifacts.riskHexCells.length
-      });
+      const { timeline, artifacts } = await this.prepareRecomputeArtifacts(nowIso);
 
       const rawRowsByTime = groupBy(artifacts.rawRows, (row) => row.forecast_time_utc);
       const riskHexCellsByTime = groupBy(artifacts.riskHexCells, (row) => row.forecast_time_utc);
@@ -816,6 +811,78 @@ export class ArgcisRepository {
       });
       throw error;
     }
+  }
+
+  async getRecomputeSegmentsTable(
+    nowIso: string
+  ): Promise<RecomputeSegmentsTableResponse> {
+    this.logInfo("recompute.table.start", {
+      recompute_time_utc: nowIso,
+      demo_mode: this.config.useDemoData,
+      h3_resolution: this.config.h3Resolution
+    });
+
+    if (this.config.useDemoData) {
+      const frame = demoFrame(nowIso);
+      const segments = frame.available_times.map((forecastTime) => {
+        const layerCounts = frame.layers
+          .map((layer) => ({
+            layer_id: layer.layer_id,
+            count: layer.feature_collection.features.length
+          }))
+          .filter((layer) => layer.count > 0);
+
+        return {
+          forecast_time_utc: forecastTime,
+          total_count: layerCounts.reduce((total, layer) => total + layer.count, 0),
+          hex_cell_count: hexCellCountForTime(demoHex(forecastTime).cells, forecastTime),
+          layer_counts: layerCounts
+        };
+      });
+
+      return {
+        generated_at: nowIso,
+        segment_count: segments.length,
+        source_signal_count: segments.reduce((total, segment) => total + segment.total_count, 0),
+        segments
+      };
+    }
+
+    const { timeline, sourceSignals, artifacts } = await this.prepareRecomputeArtifacts(nowIso);
+    const rawRowsByTime = groupBy(artifacts.rawRows, (row) => row.forecast_time_utc);
+    const riskHexCellsByTime = groupBy(artifacts.riskHexCells, (row) => row.forecast_time_utc);
+    const segments = timeline.map((forecastTime) => {
+      const rawRows = rawRowsByTime.get(forecastTime) ?? [];
+      const layerCounts = Object.entries(countBy(rawRows, (row) => row.layer_id))
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([layer_id, count]) => ({
+          layer_id,
+          count
+        }));
+
+      return {
+        forecast_time_utc: forecastTime,
+        total_count: rawRows.length,
+        hex_cell_count: (riskHexCellsByTime.get(forecastTime) ?? []).length,
+        layer_counts: layerCounts
+      };
+    });
+
+    const result = {
+      generated_at: nowIso,
+      segment_count: timeline.length,
+      source_signal_count: sourceSignals.length,
+      segments
+    };
+
+    this.logInfo("recompute.table.complete", {
+      generated_at: result.generated_at,
+      segment_count: result.segment_count,
+      source_signal_count: result.source_signal_count,
+      normalized_signal_count: artifacts.rawRows.length
+    });
+
+    return result;
   }
 
   private async fetchSourceSignals(
@@ -936,7 +1003,6 @@ export class ArgcisRepository {
       const { data, error } = await this.client
         .from("meteo_forecast_runs")
         .select("id, place_code, forecast_creation_time_utc")
-        .eq("forecast_type", "long-term")
         .lte("forecast_creation_time_utc", anchor)
         .order("forecast_creation_time_utc", { ascending: false })
         .range(offset, offset + METEO_RUN_PAGE_SIZE - 1);
@@ -976,33 +1042,47 @@ export class ArgcisRepository {
     const points: MeteoForecastPointRow[] = [];
 
     for (const [index, batch] of batches.entries()) {
-      const { data, error } = await this.client
-        .from("meteo_forecast_points")
-        .select(
-          "run_id, forecast_time_utc, air_temp, wind_speed, wind_gust, total_precipitation, condition_code"
-        )
-        .in("run_id", batch)
-        .gte("forecast_time_utc", start)
-        .lte("forecast_time_utc", end)
-        .order("forecast_time_utc", { ascending: true });
+      let offset = 0;
 
-      if (error) {
-        throw this.createContextError(
-          "Failed to fetch historical meteo forecast points",
-          error,
-          {
-            anchor_utc: anchor,
-            start_utc: start,
-            end_utc: end,
-            run_count: runIds.length,
-            batch_index: index + 1,
-            batch_count: batches.length,
-            batch_size: batch.length
-          }
-        );
+      while (true) {
+        const { data, error } = await this.client
+          .from("meteo_forecast_points")
+          .select(
+            "run_id, forecast_time_utc, air_temp, wind_speed, wind_gust, total_precipitation, condition_code"
+          )
+          .in("run_id", batch)
+          .gte("forecast_time_utc", start)
+          .lte("forecast_time_utc", end)
+          .order("forecast_time_utc", { ascending: true })
+          .range(offset, offset + METEO_POINT_PAGE_SIZE - 1);
+
+        if (error) {
+          throw this.createContextError(
+            "Failed to fetch historical meteo forecast points",
+            error,
+            {
+              anchor_utc: anchor,
+              start_utc: start,
+              end_utc: end,
+              run_count: runIds.length,
+              batch_index: index + 1,
+              batch_count: batches.length,
+              batch_size: batch.length,
+              page_offset: offset,
+              page_size: METEO_POINT_PAGE_SIZE
+            }
+          );
+        }
+
+        const page = (data ?? []) as MeteoForecastPointRow[];
+        points.push(...page);
+
+        if (page.length < METEO_POINT_PAGE_SIZE) {
+          break;
+        }
+
+        offset += METEO_POINT_PAGE_SIZE;
       }
-
-      points.push(...((data ?? []) as MeteoForecastPointRow[]));
     }
 
     return points.sort(
@@ -1116,6 +1196,49 @@ export class ArgcisRepository {
   private async listAvailableTimes(referenceTime?: string): Promise<string[]> {
     const timelineContext = await this.resolveTimelineContext(referenceTime);
     return timelineContext.availableTimes;
+  }
+
+  private async prepareRecomputeArtifacts(
+    nowIso: string
+  ): Promise<RecomputeArtifactsContext> {
+    const timeline = buildTimeline(nowIso);
+    const start = timeline[0];
+    const end = timeline[timeline.length - 1];
+
+    this.logInfo("recompute.timeline_built", {
+      segment_count: timeline.length,
+      start_utc: start,
+      end_utc: end
+    });
+
+    const sourceSignals = await this.fetchSourceSignals(nowIso, start, end);
+
+    this.logInfo("recompute.source_signals_fetched", {
+      total_count: sourceSignals.length,
+      by_source: countBy(sourceSignals, (signal) => signal.source),
+      by_layer: countBy(sourceSignals, (signal) => signal.layer_id),
+      earliest_time_utc: sourceSignals[0]?.forecast_time_utc ?? null,
+      latest_time_utc: sourceSignals.at(-1)?.forecast_time_utc ?? null
+    });
+
+    const artifacts = buildSyntheticArtifacts(
+      sourceSignals,
+      nowIso,
+      this.config.h3Resolution,
+      timeline
+    );
+
+    this.logInfo("recompute.artifacts_built", {
+      raw_row_count: artifacts.rawRows.length,
+      risk_frame_count: artifacts.riskFrames.length,
+      risk_hex_count: artifacts.riskHexCells.length
+    });
+
+    return {
+      timeline,
+      sourceSignals,
+      artifacts
+    };
   }
 
   private async resolveTimelineContext(referenceTime?: string): Promise<{
@@ -1866,4 +1989,11 @@ function diffStrings(left: string[], right: string[]): string[] {
 
 function normalizeIsoTimestamp(value: string): string {
   return new Date(value).toISOString();
+}
+
+function hexCellCountForTime(
+  cells: Array<{ forecast_time_utc: string }>,
+  forecastTime: string
+): number {
+  return cells.filter((cell) => cell.forecast_time_utc === forecastTime).length;
 }
