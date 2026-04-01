@@ -23,7 +23,13 @@ import type {
   RiskHexCell,
   RiskSummary
 } from "@argcis/shared";
-import { cellToBoundary, cellToLatLng, latLngToCell } from "h3-js";
+import {
+  cellToBoundary,
+  cellToLatLng,
+  getResolution,
+  latLngToCell,
+  polygonToCells
+} from "h3-js";
 
 export interface ForecastFrameRow {
   source_id: string;
@@ -320,21 +326,65 @@ export function buildFrameResponse(
 export function buildHexResponse(
   time: string,
   cells: RiskHexCellRow[],
-  bbox: BBox | null
+  bbox: BBox | null,
+  resolution?: number
 ): MapHexResponse {
   const filtered = bbox ? cells.filter((cell) => withinBbox(cell, bbox)) : cells;
-  const outline_cells: H3OutlineCell[] = filtered.map((cell) => ({
-    h3_index: cell.h3_index,
-    forecast_time_utc: cell.forecast_time_utc,
-    geometry: cell.geometry,
-    center: cell.center
-  }));
+  const outline_cells = buildOutlineCells(time, filtered, bbox, resolution);
 
   return {
     time,
     cells: filtered.map(({ center_lat: _lat, center_lng: _lng, ...rest }) => rest),
     outline_cells
   };
+}
+
+function buildOutlineCells(
+  time: string,
+  filteredCells: RiskHexCellRow[],
+  bbox: BBox | null,
+  resolution?: number
+): H3OutlineCell[] {
+  if (!bbox) {
+    return filteredCells.map((cell) => ({
+      h3_index: cell.h3_index,
+      forecast_time_utc: cell.forecast_time_utc,
+      geometry: cell.geometry,
+      center: cell.center
+    }));
+  }
+
+  const outlineResolution =
+    resolution ??
+    (filteredCells[0] ? getResolution(filteredCells[0].h3_index) : 5);
+  const polygon = [[
+    [bbox.west, bbox.south],
+    [bbox.east, bbox.south],
+    [bbox.east, bbox.north],
+    [bbox.west, bbox.north],
+    [bbox.west, bbox.south]
+  ]];
+  const indexes = polygonToCells(polygon, outlineResolution, true);
+
+  return indexes.map((h3Index) => {
+    const boundary = cellToBoundary(h3Index, true) as [number, number][];
+    const ring =
+      boundary[0]?.[0] === boundary[boundary.length - 1]?.[0] &&
+      boundary[0]?.[1] === boundary[boundary.length - 1]?.[1]
+        ? boundary
+        : [...boundary, boundary[0]!];
+    const center = cellToLatLng(h3Index);
+
+    return {
+      h3_index: h3Index,
+      forecast_time_utc: time,
+      geometry: {
+        type: "Polygon",
+        coordinates: [ring]
+      },
+      center: [center[1], center[0]]
+    };
+  });
 }
 
 export function buildCoordinateRiskResponse(

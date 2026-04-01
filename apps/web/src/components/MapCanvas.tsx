@@ -174,6 +174,34 @@ function buildOverlayLayers({
 }) {
   const deckLayers: Array<GeoJsonLayer | IconLayer<PointMarker>> = [];
   const shouldRenderFillZonesOnly = !isCenterInLithuania(map.getCenter());
+  const isRiskVisible = layerState["risk-hex"]?.visible !== false;
+  const isHexOutlineVisible = layerState["h3-grid-outline"]?.visible !== false;
+
+  if ((isRiskVisible || isHexOutlineVisible) && outlineCells.length > 0) {
+    deckLayers.push(
+      new GeoJsonLayer({
+        id: "h3-grid-base-outline-deck",
+        data: {
+          type: "FeatureCollection",
+          features: outlineCells.map((cell) => ({
+            type: "Feature",
+            id: `outline-${cell.h3_index}`,
+            geometry: cell.geometry,
+            properties: {
+              label: cell.h3_index
+            }
+          }))
+        },
+        pickable: true,
+        stroked: true,
+        filled: false,
+        getLineColor: [15, 23, 42, isHexOutlineVisible ? 160 : 90],
+        getLineWidth: getDynamicHexOutlineWidth(zoom, isHexOutlineVisible),
+        lineWidthUnits: "pixels",
+        onClick: (info: PickingInfo) => showPopup(map, info)
+      })
+    );
+  }
 
   for (const layer of layers) {
     if (layerState[layer.id]?.visible === false) {
@@ -207,7 +235,7 @@ function buildOverlayLayers({
             }))
           },
           pickable: true,
-          stroked: true,
+          stroked: false,
           filled: true,
           getFillColor: (feature: { properties?: Record<string, unknown> }) =>
             toRgba(
@@ -216,9 +244,6 @@ function buildOverlayLayers({
               ),
               layer.default_opacity
             ),
-          getLineColor: [15, 23, 42, 160],
-          getLineWidth: getDynamicHexOutlineWidth(zoom, false),
-          lineWidthUnits: "pixels",
           onClick: (info: PickingInfo) => showPopup(map, info)
         })
       );
@@ -226,29 +251,6 @@ function buildOverlayLayers({
     }
 
     if (layer.id === "h3-grid-outline") {
-      deckLayers.push(
-        new GeoJsonLayer({
-          id: "h3-grid-outline-deck",
-          data: {
-            type: "FeatureCollection",
-            features: outlineCells.map((cell) => ({
-              type: "Feature",
-              id: `outline-${cell.h3_index}`,
-              geometry: cell.geometry,
-              properties: {
-                label: cell.h3_index
-              }
-            }))
-          },
-          pickable: true,
-          stroked: true,
-          filled: false,
-          getLineColor: [15, 23, 42, 220],
-          getLineWidth: getDynamicHexOutlineWidth(zoom, true),
-          lineWidthUnits: "pixels",
-          onClick: (info: PickingInfo) => showPopup(map, info)
-        })
-      );
       continue;
     }
 
@@ -321,6 +323,7 @@ function isCenterInLithuania(center: maplibregl.LngLat): boolean {
 function isRenderableOutsideLithuania(layer: LayerDefinition): boolean {
   return (
     layer.id === "risk-hex" ||
+    layer.id === "h3-grid-outline" ||
     layer.id === "exercise-areas" ||
     layer.id === "activity-risk"
   );

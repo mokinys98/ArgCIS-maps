@@ -7,6 +7,7 @@ import {
   forecastOffsetHours
 } from "./time";
 import type {
+  BBox,
   CoordinateRiskTimelineResponse,
   ExerciseActivity,
   ExerciseGeometry,
@@ -305,18 +306,65 @@ export function demoHex(time: string): MapHexResponse {
     }
   ];
 
-  const outline_cells: H3OutlineCell[] = cells.map((cell) => ({
-    h3_index: cell.h3_index,
-    forecast_time_utc: cell.forecast_time_utc,
-    geometry: cell.geometry,
-    center: cell.center
-  }));
+  const outline_cells: H3OutlineCell[] = buildDemoOutlineCells(
+    time,
+    cells,
+    null
+  );
 
   return {
     time,
     cells,
     outline_cells
   };
+}
+
+export function demoHexForBbox(time: string, bbox: BBox | null): MapHexResponse {
+  const base = demoHex(time);
+  return {
+    ...base,
+    outline_cells: buildDemoOutlineCells(time, base.cells, bbox)
+  };
+}
+
+function buildDemoOutlineCells(
+  time: string,
+  cells: RiskHexCell[],
+  bbox: BBox | null
+): H3OutlineCell[] {
+  if (!bbox) {
+    return cells.map((cell) => ({
+      h3_index: cell.h3_index,
+      forecast_time_utc: cell.forecast_time_utc,
+      geometry: cell.geometry,
+      center: cell.center
+    }));
+  }
+
+  const lonStep = 0.36;
+  const latStep = 0.22;
+  const columns = Math.max(1, Math.ceil((bbox.east - bbox.west) / lonStep) + 2);
+  const rows = Math.max(1, Math.ceil((bbox.north - bbox.south) / latStep) + 2);
+  const startLon = bbox.west - lonStep;
+  const startLat = bbox.south - latStep;
+  const outline: H3OutlineCell[] = [];
+
+  for (let row = 0; row < rows; row += 1) {
+    const lat = startLat + row * latStep;
+    const lonOffset = row % 2 === 0 ? 0 : lonStep / 2;
+
+    for (let column = 0; column < columns; column += 1) {
+      const lon = startLon + column * lonStep + lonOffset;
+      outline.push({
+        h3_index: `demo-outline-${row}-${column}`,
+        forecast_time_utc: time,
+        geometry: makeHexagon(lon, lat),
+        center: [lon, lat]
+      });
+    }
+  }
+
+  return outline;
 }
 
 export function demoCoordinateRiskTimeline(

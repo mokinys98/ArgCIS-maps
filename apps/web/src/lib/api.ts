@@ -1,6 +1,6 @@
 import {
   demoFrame,
-  demoHex,
+  demoHexForBbox,
   demoLayerCatalog
 } from "@argcis/shared";
 import type {
@@ -53,7 +53,14 @@ function demoResponse<T>(path: string, options: RequestOptions): T {
     return demoFrame(url.searchParams.get("time") ?? "2026-03-07T00:00:00.000Z") as T;
   }
   if (url.pathname === "/api/map/hex") {
-    return demoHex(url.searchParams.get("time") ?? "2026-03-07T00:00:00.000Z") as T;
+    const bboxValue = url.searchParams.get("bbox");
+    const bbox = bboxValue
+      ? parseBbox(bboxValue)
+      : null;
+    return demoHexForBbox(
+      url.searchParams.get("time") ?? "2026-03-07T00:00:00.000Z",
+      bbox
+    ) as T;
   }
   if (url.pathname === "/api/exercises") {
     return [
@@ -130,6 +137,18 @@ function demoResponse<T>(path: string, options: RequestOptions): T {
   }
 
   throw new Error(`No demo response defined for ${path}`);
+}
+
+function parseBbox(
+  raw: string
+): { west: number; south: number; east: number; north: number } | null {
+  const parts = raw.split(",").map((value) => Number(value));
+  if (parts.length !== 4 || parts.some((value) => Number.isNaN(value))) {
+    return null;
+  }
+
+  const [west, south, east, north] = parts;
+  return { west, south, east, north };
 }
 
 export const api = {

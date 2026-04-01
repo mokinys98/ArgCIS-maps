@@ -232,7 +232,7 @@ export class ArgcisRepository {
       raw_metrics: ((row.raw_metrics as JsonObject | null) ?? {}) as JsonObject
     }));
 
-    return buildHexResponse(time, cells, bbox);
+    return buildHexResponse(time, cells, bbox, this.config.h3Resolution);
   }
 
   async getRiskByCoordinate(
