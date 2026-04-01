@@ -18,8 +18,7 @@ import {
   useEffect,
   useEffectEvent,
   useState,
-  useDeferredValue,
-  useRef
+  useDeferredValue
 } from "react";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { LayerPanel, type LayerState } from "./components/LayerPanel";
@@ -41,6 +40,8 @@ function buildInitialLayerState(layers: LayerDefinition[]): Record<string, Layer
 }
 
 export default function App() {
+  const TIMELINE_API_DELAY_MS = 350;
+  const PLAYBACK_INTERVAL_MS = 1000;
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,6 +50,9 @@ export default function App() {
     buildInitialLayerState(demoLayerCatalog().layers)
   );
   const [selectedTime, setSelectedTime] = useState(
+    floorToForecastHour(new Date())
+  );
+  const [requestedTime, setRequestedTime] = useState(
     floorToForecastHour(new Date())
   );
   const [frame, setFrame] = useState<MapFrameResponse | null>(null);
@@ -60,18 +64,21 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [draftName, setDraftName] = useState("");
   const [uiError, setUiError] = useState<string | null>(null);
-  const isPlayingRef = useRef(false);
-  const frameRequestIdRef = useRef(0);
-  const frameResponseWaiterRef = useRef<{
-    requestId: number;
-    time: string;
-    resolve: () => void;
-  } | null>(null);
 
   const visibleLayerIds = layers
     .filter((layer) => layerState[layer.id]?.visible)
     .map((layer) => layer.id);
   const deferredLayerKey = useDeferredValue(visibleLayerIds.join(","));
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setRequestedTime(selectedTime);
+    }, TIMELINE_API_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [selectedTime]);
 
   useEffect(() => {
     if (demoMode || !supabase) {
@@ -141,9 +148,6 @@ export default function App() {
     }
 
     let cancelled = false;
-    const requestId = ++frameRequestIdRef.current;
-    const requestedTime = selectedTime;
-
     startTransition(() => {
       const requestedLayers = deferredLayerKey
         ? deferredLayerKey.split(",").filter(Boolean)
@@ -168,6 +172,7 @@ export default function App() {
 
           if (resolvedTime && resolvedTime !== requestedTime) {
             setSelectedTime(resolvedTime);
+            setRequestedTime(resolvedTime);
             return;
           }
 
@@ -179,27 +184,13 @@ export default function App() {
           if (!cancelled) {
             setUiError(error instanceof Error ? error.message : "Nepavyko uzkrauti laiko kadro.");
           }
-        })
-        .finally(() => {
-          if (cancelled) {
-            return;
-          }
-
-          if (
-            frameResponseWaiterRef.current?.requestId === requestId &&
-            frameResponseWaiterRef.current?.time === requestedTime
-          ) {
-            const waiter = frameResponseWaiterRef.current;
-            frameResponseWaiterRef.current = null;
-            waiter.resolve();
-          }
         });
     });
 
     return () => {
       cancelled = true;
     };
-  }, [sessionToken, selectedTime, deferredLayerKey, bbox]);
+  }, [sessionToken, requestedTime, deferredLayerKey, bbox]);
 
   const getNextTimelineTime = useEffectEvent((direction: -1 | 1, wrap = false) => {
     const timeline = frame?.available_times ?? demoTimeline();
@@ -236,58 +227,19 @@ export default function App() {
     return nextTime;
   });
 
-  const tickPlayback = useEffectEvent(() => {
-    return stepTimeline(1, true);
-  });
-
-  const waitForFrameResponse = useEffectEvent((time: string, timeoutMs = 10000) =>
-    new Promise<void>((resolve) => {
-      const requestId = frameRequestIdRef.current + 1;
-      frameResponseWaiterRef.current = {
-        requestId,
-        time,
-        resolve: () => {
-          resolve();
-        }
-      };
-
-      setTimeout(() => {
-        if (frameResponseWaiterRef.current?.time === time) {
-          frameResponseWaiterRef.current = null;
-          resolve();
-        }
-      }, timeoutMs);
-    })
-  );
-
   useEffect(() => {
     if (!isPlaying) {
       return;
     }
 
-    let cancelled = false;
-    isPlayingRef.current = true;
-
-    (async () => {
-      while (!cancelled && isPlayingRef.current) {
-        const nextTime = tickPlayback();
-        if (!nextTime) {
-          break;
-        }
-
-        // eslint-disable-next-line no-await-in-loop
-        await waitForFrameResponse(nextTime);
-        // eslint-disable-next-line no-await-in-loop
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-    })();
+    const intervalId = window.setInterval(() => {
+      stepTimeline(1, true);
+    }, PLAYBACK_INTERVAL_MS);
 
     return () => {
-      cancelled = true;
-      isPlayingRef.current = false;
-      frameResponseWaiterRef.current = null;
+      window.clearInterval(intervalId);
     };
-  }, [isPlaying, tickPlayback, waitForFrameResponse]);
+  }, [isPlaying, stepTimeline]);
 
   async function handleLogin(email: string, password: string) {
     if (!supabase) {
@@ -358,7 +310,7 @@ export default function App() {
     });
   }
 
-  const activeTime = frame?.time ?? selectedTime;
+  const activeTime = frame?.time ?? requestedTime;
   const frameLayers = frame?.layers ?? demoFrame(activeTime).layers;
   const availableTimes = frame?.available_times ?? demoTimeline();
 
@@ -399,7 +351,7 @@ export default function App() {
       <main className="workspace">
         <Timeline
           availableTimes={availableTimes}
-          selectedTime={activeTime}
+          selectedTime={selectedTime}
           isPlaying={isPlaying}
           onChange={setSelectedTime}
           onStep={(direction) => stepTimeline(direction)}
