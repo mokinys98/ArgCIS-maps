@@ -7,11 +7,11 @@ import type {
 
 const HEX_AGGREGATION_THRESHOLDS = {
   redThresholdScore: 85,
-  yellowThresholdScore: 55,
-  averageWeight: 0.6,
+  yellowThresholdScore: 45,
+  averageWeight: 0.35,
   severeShareWeight: 0.25,
-  maxPointScoreWeight: 0.15,
-  yellowShareValue: 40,
+  maxPointScoreWeight: 0.4,
+  yellowShareValue: 55,
   roadDominantBonus: 15,
   roadPresentBonus: 8
 } as const;
@@ -24,6 +24,15 @@ export interface ThresholdConfig {
   yellowThunderProbability: number;
   redThunderProbability: number;
   yellowPrecipitationMm: number;
+}
+
+export interface RiskAggregationContext {
+  layer_id?: string;
+  source?: "meteo" | "road";
+}
+
+export interface RiskAggregationItem extends RiskAggregationContext {
+  summary: RiskSummary;
 }
 
 export const DEFAULT_THRESHOLDS: ThresholdConfig = {
@@ -55,20 +64,16 @@ function pushReason(target: string[], reason: string): void {
 }
 
 export function confidenceMultiplierForSignalCount(signalCount: number): number {
-  if (signalCount >= 5) {
+  if (signalCount >= 3) {
     return 1;
   }
 
-  if (signalCount >= 3) {
+  if (signalCount === 2) {
     return 0.85;
   }
 
-  if (signalCount === 2) {
-    return 0.7;
-  }
-
   if (signalCount === 1) {
-    return 0.5;
+    return 0.75;
   }
 
   return 0;
@@ -163,26 +168,51 @@ export function aggregateRiskSummaries(items: RiskSummary[]): RiskSummary {
     };
   }
 
-  const redItems = items.filter((item) => item.risk_level === "red");
-  const yellowItems = items.filter((item) => item.risk_level === "yellow");
+  const normalizedItems = items.map(normalizeAggregationItem);
+
+  const redItems = normalizedItems.filter((item) => item.summary.risk_level === "red");
+  const yellowItems = normalizedItems.filter((item) => item.summary.risk_level === "yellow");
   const yellowOrRedItems = [...redItems, ...yellowItems];
   const signalCount = items.length;
   const redSignalCount = redItems.length;
   const yellowSignalCount = yellowItems.length;
-  const redShare = redItems.length / items.length;
-  const yellowShare = yellowItems.length / items.length;
+  const totalItemWeight = normalizedItems.reduce(
+    (total, item) => total + aggregationWeightForItem(item),
+    0
+  );
+  const safeTotalWeight = totalItemWeight > 0 ? totalItemWeight : 1;
+  const redShare =
+    redItems.reduce((total, item) => total + aggregationWeightForItem(item), 0) /
+    safeTotalWeight;
+  const yellowShare =
+    yellowItems.reduce((total, item) => total + aggregationWeightForItem(item), 0) /
+    safeTotalWeight;
   const averageStationScore =
-    items.reduce((total, item) => total + item.risk_score, 0) / items.length;
+    normalizedItems.reduce(
+      (total, item) =>
+        total + item.summary.risk_score * aggregationWeightForItem(item),
+      0
+    ) / safeTotalWeight;
   const severeShareScore =
     redShare * 100 + yellowShare * HEX_AGGREGATION_THRESHOLDS.yellowShareValue;
-  const maxPointScore = Math.max(...items.map((item) => item.risk_score));
-  const roadHardCount = items.filter((item) =>
-    item.risk_reasons.some(
+  const maxPointScore = Math.max(
+    ...normalizedItems.map((item) => item.summary.risk_score * layerWeightForItem(item))
+  );
+  const roadHardCount = normalizedItems.filter((item) =>
+    item.summary.risk_reasons.some(
       (reason) =>
         reason === "kelio danga apledejusi" || reason === "eismo apribojimas"
     )
   ).length;
-  const roadShare = roadHardCount / signalCount;
+  const roadShare =
+    normalizedItems
+      .filter((item) =>
+        item.summary.risk_reasons.some(
+          (reason) =>
+            reason === "kelio danga apledejusi" || reason === "eismo apribojimas"
+        )
+      )
+      .reduce((total, item) => total + aggregationWeightForItem(item), 0) / safeTotalWeight;
   const roadHardBonus =
     roadShare >= 0.3
       ? HEX_AGGREGATION_THRESHOLDS.roadDominantBonus
@@ -212,7 +242,7 @@ export function aggregateRiskSummaries(items: RiskSummary[]): RiskSummary {
     aggregateLevel === "green"
       ? []
       : Array.from(
-          new Set(contributingItems.flatMap((item) => item.risk_reasons))
+          new Set(contributingItems.flatMap((item) => item.summary.risk_reasons))
         );
 
   return {
@@ -229,6 +259,49 @@ export function aggregateRiskSummaries(items: RiskSummary[]): RiskSummary {
         ? "Rizikos signalu nerasta."
         : `Bendra rizika ${aggregateLevel} (${aggregateScore}): ${combinedReasons.join(", ")}.`
   };
+}
+
+function normalizeAggregationItem(item: RiskSummary | RiskAggregationItem): RiskAggregationItem {
+  if ("summary" in item) {
+    return item;
+  }
+
+  return {
+    summary: item
+  };
+}
+
+function aggregationWeightForItem(item: RiskAggregationItem): number {
+  return layerWeightForItem(item) * impactWeightForSummary(item.summary);
+}
+
+function layerWeightForItem(item: RiskAggregationItem): number {
+  switch (item.layer_id) {
+    case "road-alerts":
+      return 1.35;
+    case "road-weather-points":
+      return 1.15;
+    case "meteo-forecast-points":
+      return 1.2;
+    default:
+      return item.source === "road" ? 1.15 : item.source === "meteo" ? 1.2 : 1;
+  }
+}
+
+function impactWeightForSummary(summary: RiskSummary): number {
+  if (summary.risk_level === "red") {
+    return 1.15;
+  }
+
+  if (summary.risk_level === "yellow") {
+    return 1;
+  }
+
+  if (summary.risk_score > 0 || summary.risk_reasons.length > 0) {
+    return 0.4;
+  }
+
+  return 0.02;
 }
 
 export function riskColor(level: RiskLevel): string {

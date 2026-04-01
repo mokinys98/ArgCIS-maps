@@ -31,18 +31,18 @@ describe("risk logic", () => {
       evaluateRisk({ road_restriction: true })
     ]);
 
-    expect(summary.risk_level).toBe("yellow");
+    expect(summary.risk_level).toBe("red");
     expect(summary.risk_reasons).toContain("rukas");
     expect(summary.risk_reasons).toContain("eismo apribojimas");
   });
 
-  it("does not mark the whole hex red from a single red outlier out of many", () => {
+  it("keeps a single red outlier visible even among many neutral points", () => {
     const summary = aggregateRiskSummaries([
       evaluateRisk({ road_restriction: true }),
       ...Array.from({ length: 14 }, () => evaluateRisk({}))
     ]);
 
-    expect(summary.risk_level).toBe("green");
+    expect(summary.risk_level).toBe("red");
     expect(summary.signal_count).toBe(15);
     expect(summary.red_signal_count).toBe(1);
   });
@@ -53,8 +53,8 @@ describe("risk logic", () => {
       evaluateRisk({ road_ice: true })
     ]);
 
-    expect(summary.risk_level).toBe("yellow");
-    expect(summary.confidence_multiplier).toBe(0.7);
+    expect(summary.risk_level).toBe("red");
+    expect(summary.confidence_multiplier).toBe(0.85);
   });
 
   it("does not overstate 2 of 2 severe weather signals after confidence penalty", () => {
@@ -64,7 +64,7 @@ describe("risk logic", () => {
     ]);
 
     expect(summary.risk_level).toBe("yellow");
-    expect(summary.risk_score).toBeLessThan(70);
+    expect(summary.risk_score).toBeGreaterThanOrEqual(60);
   });
 
   it("reduces final hex score when only one signal exists", () => {
@@ -73,8 +73,26 @@ describe("risk logic", () => {
     ]);
 
     expect(summary.signal_count).toBe(1);
-    expect(summary.confidence_multiplier).toBe(0.5);
-    expect(summary.risk_level).toBe("green");
+    expect(summary.confidence_multiplier).toBe(0.75);
+    expect(summary.risk_level).toBe("yellow");
+  });
+
+  it("keeps many neutral points from washing out a single meteo warning", () => {
+    const summary = aggregateRiskSummaries([
+      {
+        summary: evaluateRisk({ wind_gust_ms: 15 }),
+        layer_id: "meteo-forecast-points",
+        source: "meteo"
+      },
+      ...Array.from({ length: 8 }, () => ({
+        summary: evaluateRisk({}),
+        layer_id: "meteo-forecast-points",
+        source: "meteo" as const
+      }))
+    ]);
+
+    expect(summary.risk_level).toBe("yellow");
+    expect(summary.yellow_signal_count).toBe(1);
   });
 
   it("provides demo fixtures for the 24 hour timeline", () => {

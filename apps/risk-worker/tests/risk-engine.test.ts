@@ -94,9 +94,9 @@ describe("risk engine", () => {
     expect(artifacts.rawRows).toHaveLength(2);
     expect(artifacts.riskFrames).toHaveLength(25);
     expect(artifacts.riskHexCells.length).toBeGreaterThan(0);
-    expect(artifacts.riskHexCells[0]?.risk_level).toBe("yellow");
+    expect(artifacts.riskHexCells[0]?.risk_level).toBe("red");
     expect(artifacts.riskHexCells[0]?.signal_count).toBe(2);
-    expect(artifacts.riskHexCells[0]?.confidence_multiplier).toBe(0.7);
+    expect(artifacts.riskHexCells[0]?.confidence_multiplier).toBe(0.85);
   });
 
   it("does not clone a single source timestamp across the full 24 hour timeline", () => {
@@ -254,7 +254,7 @@ describe("risk engine", () => {
       artifacts.riskHexCells
     );
 
-    expect(activities[0]?.risk_level).toBe("yellow");
+    expect(activities[0]?.risk_level).toBe("red");
     expect(activities[0]?.risk_reasons.length).toBeGreaterThan(0);
   });
 
@@ -310,8 +310,44 @@ describe("risk engine", () => {
       7
     );
 
-    expect(artifacts.riskHexCells[0]?.risk_level).toBe("green");
+    expect(artifacts.riskHexCells[0]?.risk_level).toBe("red");
     expect(artifacts.riskHexCells[0]?.signal_count).toBe(4);
-    expect(artifacts.riskHexCells[0]?.confidence_multiplier).toBe(0.85);
+    expect(artifacts.riskHexCells[0]?.confidence_multiplier).toBe(1);
+  });
+
+  it("surfaces meteo risk even when most points in the hex are neutral", () => {
+    const signalsWithNeutralMeteo: RawSignalRecord[] = [
+      {
+        id: "sig-y1",
+        source: "meteo",
+        layer_id: "meteo-forecast-points",
+        forecast_time_utc: "2026-03-07T06:00:00.000Z",
+        latitude: 54.6872,
+        longitude: 25.2797,
+        location_name: "Warning point",
+        metrics: {
+          wind_gust_ms: 15
+        }
+      },
+      ...Array.from({ length: 5 }, (_, index) => ({
+        id: `sig-g${index + 1}`,
+        source: "meteo" as const,
+        layer_id: "meteo-forecast-points",
+        forecast_time_utc: "2026-03-07T06:00:00.000Z",
+        latitude: 54.6872 + (index + 1) * 0.0001,
+        longitude: 25.2797 + (index + 1) * 0.0001,
+        location_name: `Neutral point ${index + 1}`,
+        metrics: {}
+      }))
+    ];
+
+    const artifacts = buildSyntheticArtifacts(
+      signalsWithNeutralMeteo,
+      "2026-03-07T00:00:00.000Z",
+      7
+    );
+
+    expect(artifacts.riskHexCells[0]?.risk_level).toBe("yellow");
+    expect(artifacts.riskHexCells[0]?.yellow_signal_count).toBe(1);
   });
 });

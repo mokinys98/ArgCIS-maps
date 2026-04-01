@@ -145,9 +145,11 @@ export function buildSyntheticArtifacts(
   const riskHexCells: RiskHexCellRow[] = [];
   for (const [key, rows] of buckets) {
     const [forecast_time_utc, h3Index] = key.split("::");
-    const summaries = rows.map((row) =>
-      evaluateRisk(row.metrics as RawSignalMetrics)
-    );
+    const summaries = rows.map((row) => ({
+      summary: evaluateRisk(row.metrics as RawSignalMetrics),
+      layer_id: row.layer_id,
+      source: row.source
+    }));
     const aggregate = aggregateRiskSummaries(summaries);
     const boundary = cellToBoundary(h3Index, true) as [number, number][];
     const ring =
