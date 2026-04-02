@@ -129,4 +129,91 @@ describe("risk worker api index", () => {
       longitude: 25.2797
     });
   });
+
+  it("returns route risk response for two addresses", async () => {
+    const response = await worker.fetch(
+      new Request("https://example.com/api/route/risk", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          from_address: "Vilnius, Lithuania",
+          to_address: "Kaunas, Lithuania",
+          time: "2026-04-02T10:00:00.000Z"
+        })
+      }),
+      createEnv()
+    );
+
+    expect(response.status).toBe(200);
+
+    const body = await response.json() as {
+      route: { geometry: { type: string; coordinates: unknown[] } };
+      segments: unknown[];
+      summary: { risk_level: string };
+    };
+
+    expect(body.route.geometry.type).toBe("LineString");
+    expect(body.route.geometry.coordinates.length).toBeGreaterThan(1);
+    expect(body.segments.length).toBeGreaterThan(0);
+    expect(["green", "yellow", "red"]).toContain(body.summary.risk_level);
+  });
+
+  it("returns 404 when origin address is not found", async () => {
+    const response = await worker.fetch(
+      new Request("https://example.com/api/route/risk", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          from_address: "missing-origin",
+          to_address: "Kaunas, Lithuania",
+          time: "2026-04-02T10:00:00.000Z"
+        })
+      }),
+      createEnv()
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("returns 404 when destination address is not found", async () => {
+    const response = await worker.fetch(
+      new Request("https://example.com/api/route/risk", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          from_address: "Vilnius, Lithuania",
+          to_address: "missing-destination",
+          time: "2026-04-02T10:00:00.000Z"
+        })
+      }),
+      createEnv()
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("returns 404 when route cannot be built", async () => {
+    const response = await worker.fetch(
+      new Request("https://example.com/api/route/risk", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          from_address: "no-route",
+          to_address: "Kaunas, Lithuania",
+          time: "2026-04-02T10:00:00.000Z"
+        })
+      }),
+      createEnv()
+    );
+
+    expect(response.status).toBe(404);
+  });
 });

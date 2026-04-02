@@ -145,7 +145,8 @@ function createConfig(): AppConfig {
     useDemoData: false,
     h3Resolution: 6,
     meteoSourceView: "argcis_ingest_meteo_feed",
-    roadSourceView: "argcis_ingest_road_feed"
+    roadSourceView: "argcis_ingest_road_feed",
+    mapboxAccessToken: ""
   };
 }
 

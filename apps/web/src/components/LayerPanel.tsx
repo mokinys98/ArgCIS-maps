@@ -33,7 +33,7 @@ export function LayerPanel({
   );
 
   return (
-    <section className="panel">
+    <section className="panel layer-panel">
       <div className="panel-head">
         <div>
           <p className="eyebrow">Layer katalogas</p>
@@ -41,25 +41,26 @@ export function LayerPanel({
         </div>
       </div>
 
-      <div className="layer-list">
-        {visibleLayers.map((layer) => {
-          const current = layerState[layer.id];
-          return (
-            <article className="layer-card" key={layer.id}>
-              <label className="layer-toggle">
-                <input
-                  type="checkbox"
-                  checked={current?.visible ?? false}
-                  onChange={() => onToggle(layer.id)}
-                />
-                <span>
-                  <strong>{layer.name}</strong>
-                  <small>{layer.description}</small>
-                </span>
-              </label>
-            </article>
-          );
-        })}
+      <div className="layer-panel-scroll">
+        <div className="layer-list">
+          {visibleLayers.map((layer) => {
+            const current = layerState[layer.id];
+            return (
+              <article className="layer-card" key={layer.id}>
+                <label className="layer-toggle">
+                  <input
+                    type="checkbox"
+                    checked={current?.visible ?? false}
+                    onChange={() => onToggle(layer.id)}
+                  />
+                  <span>
+                    <strong>{layer.name}</strong>
+                  </span>
+                </label>
+              </article>
+            );
+          })}
+        </div>
       </div>
     </section>
   );

@@ -70,19 +70,15 @@ export function Timeline({
         />
 
         <div className="timeline-scale">
-          <span>{timelineStartLabel}</span>
-          <span>{timelineEndLabel}</span>
+          <span style={{ fontSize: "0.88em" }}>{timelineStartLabel}</span>
+          <span style={{ fontSize: "0.88em" }}>{timelineEndLabel}</span>
         </div>
       </div>
 
       <div className="timeline-meta">
         <div className="timeline-current">
-          <strong>{selectedLabel}</strong>
-          <span>{selectedIndex + 1} / {availableTimes.length || 1}</span>
-        </div>
-        <div className="timeline-badges">
-          <span className="timeline-phase active">Forecast langas: 24 val.</span>
-          <span className="timeline-phase">Rezoliucija: kas 1 val.</span>
+          <strong style={{ fontSize: "0.88em" }}>{selectedLabel}</strong>
+          <span style={{ fontSize: "0.88em" }}>{selectedIndex + 1} / {availableTimes.length || 1}</span>
         </div>
       </div>
     </section>

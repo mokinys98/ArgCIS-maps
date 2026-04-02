@@ -4,6 +4,7 @@ import type {
   LayerDefinition,
   MapFrameResponse,
   MapHexResponse,
+  RouteRiskResponse,
   SavedMap
 } from "@argcis/shared";
 import {
@@ -23,6 +24,7 @@ import {
 import { LayerPanel, type LayerState } from "./components/LayerPanel";
 import { LoginScreen } from "./components/LoginScreen";
 import { MapCanvas } from "./components/MapCanvas";
+import { RoutePlannerPanel } from "./components/RoutePlannerPanel";
 import { Timeline } from "./components/Timeline";
 import { api } from "./lib/api";
 import { demoMode, supabase } from "./lib/auth";
@@ -63,6 +65,11 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [draftName, setDraftName] = useState("");
   const [uiError, setUiError] = useState<string | null>(null);
+  const [fromAddress, setFromAddress] = useState("Vilnius, Lithuania");
+  const [toAddress, setToAddress] = useState("Kaunas, Lithuania");
+  const [routeRisk, setRouteRisk] = useState<RouteRiskResponse | null>(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
 
   const visibleLayerIds = layers
     .filter((layer) => layerState[layer.id]?.visible)
@@ -295,6 +302,28 @@ export default function App() {
     setDraftName("");
   }
 
+  async function handleRouteSubmit() {
+    setRouteLoading(true);
+    setRouteError(null);
+
+    try {
+      const response = await api.getRouteRisk(
+        {
+          from_address: fromAddress,
+          to_address: toAddress,
+          time: selectedTime
+        },
+        sessionToken
+      );
+      setRouteRisk(response);
+    } catch (error) {
+      setRouteRisk(null);
+      setRouteError(error instanceof Error ? error.message : "Nepavyko apskaiciuoti marsruto.");
+    } finally {
+      setRouteLoading(false);
+    }
+  }
+
   function applySavedMap(savedMap: SavedMap) {
     setDraftName(savedMap.name);
     setSelectedTime(savedMap.active_time_utc ?? selectedTime);
@@ -333,6 +362,18 @@ export default function App() {
           {uiError ? <p className="error-text">{uiError}</p> : null}
         </div>
 
+        <RoutePlannerPanel
+          fromAddress={fromAddress}
+          toAddress={toAddress}
+          selectedTime={selectedTime}
+          route={routeRisk}
+          loading={routeLoading}
+          error={routeError}
+          onFromAddressChange={setFromAddress}
+          onToAddressChange={setToAddress}
+          onSubmit={handleRouteSubmit}
+        />
+
         <LayerPanel
           layers={layers}
           layerState={layerState}
@@ -359,6 +400,7 @@ export default function App() {
           frameLayers={frameLayers}
           hex={hex}
           layerState={layerState}
+          routeRisk={routeRisk}
           onBoundsChange={setBbox}
         />
       </main>

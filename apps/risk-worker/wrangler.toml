@@ -12,3 +12,7 @@ USE_DEMO_DATA = "false"
 H3_RESOLUTION = "5"
 METEO_SOURCE_VIEW = "argcis_ingest_meteo_feed"
 ROAD_SOURCE_VIEW = "argcis_ingest_road_feed"
+
+# Sensitive values such as MAPBOX_ACCESS_TOKEN, SUPABASE_SERVICE_ROLE_KEY and
+# similar secrets should be provided via `.dev.vars` for local development and
+# `wrangler secret put <NAME>` for deployed environments.

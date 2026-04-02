@@ -153,7 +153,9 @@ export function evaluateRisk(
   };
 }
 
-export function aggregateRiskSummaries(items: RiskSummary[]): RiskSummary {
+export function aggregateRiskSummaries(
+  items: Array<RiskSummary | RiskAggregationItem>
+): RiskSummary {
   if (items.length === 0) {
     return {
       risk_score: 0,

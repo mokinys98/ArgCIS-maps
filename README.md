@@ -687,10 +687,12 @@ Jei naudoji si repo su realia ingest schema, ziurek:
 - `H3_RESOLUTION`
 - `METEO_SOURCE_VIEW`
 - `ROAD_SOURCE_VIEW`
+- `MAPBOX_ACCESS_TOKEN`
 
 Svarbios pastabos:
 
 - `SUPABASE_SERVICE_ROLE_KEY` turi buti tikras server-side `service_role`, ne anon ir ne publishable key.
+- `MAPBOX_ACCESS_TOKEN` reikalingas `POST /api/route/risk`, kai `USE_DEMO_DATA=false`.
 - `config.ts` default `H3_RESOLUTION` yra `6`, bet commit'intame `wrangler.toml` dev aplinkai nustatyta `5`.
 - `APP_ORIGIN` gali buti `*` arba comma-separated allowed origin sarasas.
 
@@ -725,6 +727,17 @@ Jei nori realios ingest integracijos, papildomai turek ingest schema ir view:
 ### 3. Worker konfiguracija
 
 Sutvarkyk `apps/risk-worker/wrangler.toml` ir atitinkamus secret/env.
+
+Lokaliai:
+
+- nukopijuok `apps/risk-worker/.dev.vars.example` i `.dev.vars`;
+- uzpildyk `MAPBOX_ACCESS_TOKEN`;
+- jei naudoji realius duomenis, uzpildyk ir `SUPABASE_*`.
+
+Deploy aplinkoje:
+
+- naudok `wrangler secret put MAPBOX_ACCESS_TOKEN`;
+- analogiskai laikyk ir kitus jautrius raktus, pvz. `SUPABASE_SERVICE_ROLE_KEY`.
 
 Esamas failas numato:
 

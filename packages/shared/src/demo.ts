@@ -19,7 +19,9 @@ import type {
   MapHexResponse,
   RawSignalMetrics,
   H3OutlineCell,
-  RiskHexCell
+  RiskHexCell,
+  RouteRiskRequest,
+  RouteRiskResponse
 } from "./types";
 
 const START = new Date("2026-03-07T00:00:00.000Z");
@@ -396,5 +398,87 @@ export function demoCoordinateRiskTimeline(
     h3_index: h3Index,
     available_times: availableTimes,
     cells
+  };
+}
+
+export function demoRouteRisk(request: RouteRiskRequest): RouteRiskResponse {
+  const normalizedFrom = request.from_address.trim().toLowerCase();
+  const normalizedTo = request.to_address.trim().toLowerCase();
+
+  if (!normalizedFrom || normalizedFrom.includes("missing-origin")) {
+    throw new Error("Pradzios adresas nerastas.");
+  }
+
+  if (!normalizedTo || normalizedTo.includes("missing-destination")) {
+    throw new Error("Pabaigos adresas nerastas.");
+  }
+
+  if (
+    normalizedFrom.includes("no-route") ||
+    normalizedTo.includes("no-route")
+  ) {
+    throw new Error("Marsrutas tarp nurodytu adresu nerastas.");
+  }
+
+  const routeCoordinates: [number, number][] = [
+    [25.2797, 54.6872],
+    [25.18, 54.72],
+    [24.95, 54.82],
+    [24.62, 54.89]
+  ];
+  const samples = routeCoordinates.map((coordinates) =>
+    demoCoordinateRiskTimeline(coordinates[1], coordinates[0])
+  );
+  const summaries = samples.map((sample) => {
+    const matched =
+      sample.cells.find((cell) => cell.forecast_time_utc === request.time) ??
+      sample.cells[0];
+
+    return matched ?? evaluateRisk({});
+  });
+  const segmentSummaries = routeCoordinates.slice(0, -1).map((_, index) =>
+    aggregateRiskSummaries([summaries[index]!, summaries[index + 1]!])
+  );
+
+  return {
+    time: request.time,
+    origin: {
+      address: request.from_address,
+      coordinates: routeCoordinates[0]!
+    },
+    destination: {
+      address: request.to_address,
+      coordinates: routeCoordinates.at(-1)!
+    },
+    route: {
+      geometry: {
+        type: "LineString",
+        coordinates: routeCoordinates
+      },
+      distance_m: 68500,
+      duration_s: 3920
+    },
+    segments: segmentSummaries.map((summary, index) => ({
+      id: `demo-route-segment-${index + 1}`,
+      geometry: {
+        type: "LineString",
+        coordinates: [
+          routeCoordinates[index]!,
+          routeCoordinates[index + 1]!
+        ]
+      },
+      distance_m: Math.round(68500 / segmentSummaries.length),
+      duration_s: Math.round(3920 / segmentSummaries.length),
+      sample_count: 2,
+      instruction:
+        index === 0
+          ? "Vaziuokite i vakarus nuo Vilniaus"
+          : index === segmentSummaries.length - 1
+            ? "Teskite iki Kauno centro"
+            : "Teskite pagrindiniu keliu",
+      road_name: index === 1 ? "A1" : "Miesto gatves",
+      ...summary
+    })),
+    summary: aggregateRiskSummaries(segmentSummaries)
   };
 }

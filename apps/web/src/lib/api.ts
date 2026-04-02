@@ -1,7 +1,8 @@
 import {
   demoFrame,
   demoHexForBbox,
-  demoLayerCatalog
+  demoLayerCatalog,
+  demoRouteRisk
 } from "@argcis/shared";
 import type {
   ExerciseActivity,
@@ -9,6 +10,8 @@ import type {
   LayerCatalogResponse,
   MapFrameResponse,
   MapHexResponse,
+  RouteRiskRequest,
+  RouteRiskResponse,
   SavedMap
 } from "@argcis/shared";
 
@@ -136,6 +139,10 @@ function demoResponse<T>(path: string, options: RequestOptions): T {
     ] as T;
   }
 
+  if (url.pathname === "/api/route/risk") {
+    return demoRouteRisk(options.body as RouteRiskRequest) as T;
+  }
+
   throw new Error(`No demo response defined for ${path}`);
 }
 
@@ -201,6 +208,14 @@ export const api = {
     }>;
   }, token?: string | null) {
     return request<SavedMap>("/api/saved-maps", {
+      method: "POST",
+      token,
+      body: payload
+    });
+  },
+
+  getRouteRisk(payload: RouteRiskRequest, token?: string | null) {
+    return request<RouteRiskResponse>("/api/route/risk", {
       method: "POST",
       token,
       body: payload

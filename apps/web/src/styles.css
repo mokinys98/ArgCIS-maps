@@ -28,7 +28,7 @@ input {
 .app-shell {
   display: grid;
   grid-template-columns: minmax(320px, 420px) 1fr;
-  min-height: 100vh;
+  height: 100vh;
   gap: 1.25rem;
   padding: 1.25rem;
 }
@@ -42,6 +42,11 @@ input {
 
 .workspace {
   grid-template-rows: auto 1fr;
+  min-height: 0;
+}
+
+.sidebar {
+  grid-template-rows: auto auto auto;
 }
 
 .panel,
@@ -124,7 +129,9 @@ input {
 .layer-list,
 .saved-list,
 .activity-list,
-.scenario-list {
+.scenario-list,
+.route-form,
+.route-results {
   display: grid;
   gap: 0.75rem;
 }
@@ -149,12 +156,82 @@ input {
 }
 
 .preset-form input,
-.login-form input {
+.login-form input,
+.route-form input {
   width: 100%;
   padding: 0.75rem 0.9rem;
   border-radius: 14px;
   border: 1px solid rgba(18, 33, 45, 0.14);
   background: rgba(255, 255, 255, 0.88);
+}
+
+.route-form label,
+.route-summary-card,
+.route-endpoint-card {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.route-panel {
+  display: grid;
+  grid-template-rows: auto auto auto;
+  align-self: start;
+  max-height: min(48vh, 680px);
+}
+
+.layer-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-self: start;
+  max-height: min(32vh, 520px);
+  overflow: hidden;
+}
+
+.layer-panel-scroll {
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+
+.layer-panel-scroll::-webkit-scrollbar {
+  width: 0.55rem;
+}
+
+.layer-panel-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(18, 33, 45, 0.18);
+}
+
+.route-results-scroll {
+  max-height: min(24vh, 320px);
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+
+.route-results-scroll::-webkit-scrollbar {
+  width: 0.55rem;
+}
+
+.route-results-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(18, 33, 45, 0.18);
+}
+
+.route-form label span {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #12212d;
+}
+
+.route-endpoint-card {
+  border-radius: 18px;
+  padding: 0.85rem;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(18, 33, 45, 0.08);
+}
+
+.route-summary-card p,
+.activity-card p {
+  margin: 0;
 }
 
 .saved-item,
@@ -224,8 +301,8 @@ button:hover,
 }
 
 .transport-button {
-  min-width: 3rem;
-  height: 3rem;
+  min-width: 2rem;
+  height: 2em;
   padding: 0 1rem;
   border-radius: 999px;
   font-weight: 700;
@@ -366,6 +443,11 @@ button:hover,
 @media (max-width: 1080px) {
   .app-shell {
     grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .sidebar {
+    grid-template-rows: auto;
   }
 
   .map-canvas {

@@ -156,6 +156,48 @@ export interface CoordinateRiskTimelineResponse {
   cells: RiskHexCell[];
 }
 
+export interface RouteRiskRequest {
+  from_address: string;
+  to_address: string;
+  time: string;
+}
+
+export interface RouteEndpoint {
+  address: string;
+  coordinates: [number, number];
+}
+
+export interface RouteSegmentRisk extends RiskSummary {
+  id: string;
+  geometry: LineStringGeometry;
+  distance_m: number;
+  duration_s: number;
+  sample_count: number;
+  instruction?: string;
+  road_name?: string;
+}
+
+export interface RouteRiskResponse {
+  time: string;
+  origin: RouteEndpoint;
+  destination: RouteEndpoint;
+  route: {
+    geometry: LineStringGeometry;
+    distance_m: number;
+    duration_s: number;
+    steps?: Array<{
+      id: string;
+      distance_m: number;
+      duration_s: number;
+      instruction: string;
+      road_name: string;
+      geometry: LineStringGeometry | null;
+    }>;
+  };
+  segments: RouteSegmentRisk[];
+  summary: RiskSummary;
+}
+
 export interface ExerciseScenario {
   id: string;
   name: string;

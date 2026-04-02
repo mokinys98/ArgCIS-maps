@@ -1,9 +1,12 @@
 APP_ORIGIN=http://127.0.0.1:5173,http://localhost:5173
 ALLOW_ANON_READ=true
-USE_DEMO_DATA=true
-H3_RESOLUTION=2
+USE_DEMO_DATA=false
+H3_RESOLUTION=5
 METEO_SOURCE_VIEW=argcis_ingest_meteo_feed
 ROAD_SOURCE_VIEW=argcis_ingest_road_feed
+
+# Required for route geocoding and directions when USE_DEMO_DATA=false.
+MAPBOX_ACCESS_TOKEN=your-mapbox-access-token
 
 # Demo mode works without Supabase. Set USE_DEMO_DATA=false and fill these for real data.
 SUPABASE_URL=https://your-project.supabase.co

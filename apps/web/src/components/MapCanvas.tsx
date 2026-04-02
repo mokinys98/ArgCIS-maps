@@ -5,7 +5,8 @@ import type {
   FrameLayerData,
   H3OutlineCell,
   LayerDefinition,
-  MapHexResponse
+  MapHexResponse,
+  RouteRiskResponse
 } from "@argcis/shared";
 import { deriveRiskLevelFromScore, riskColor } from "@argcis/shared";
 import maplibregl from "maplibre-gl";
@@ -18,6 +19,7 @@ interface MapCanvasProps {
   frameLayers: FrameLayerData[];
   hex: MapHexResponse | null;
   layerState: Record<string, LayerState>;
+  routeRisk: RouteRiskResponse | null;
   onBoundsChange(bbox: string): void;
   onLayersUpdated?: () => void;
 }
@@ -27,6 +29,7 @@ export function MapCanvas({
   frameLayers,
   hex,
   layerState,
+  routeRisk,
   onBoundsChange,
   onLayersUpdated
 }: MapCanvasProps) {
@@ -94,6 +97,7 @@ export function MapCanvas({
         riskCells: hex?.cells ?? [],
         outlineCells: hex?.outline_cells ?? [],
         layerMap,
+        routeRisk,
         zoom: mapZoom
       })
     });
@@ -101,7 +105,7 @@ export function MapCanvas({
     // Notify parent that layers were updated. Prefer deck.gl's
     // onAfterRender if available so callers wait for a finished render.
     if (typeof onLayersUpdated === "function") {
-      const deck = (overlay as any).deck ?? overlayRef.current?.deck;
+      const deck = (overlay as any).deck ?? (overlayRef.current as any)?.deck;
       if (deck && typeof deck.setProps === "function") {
         const oneTime = () => {
           try {
@@ -127,7 +131,7 @@ export function MapCanvas({
         requestAnimationFrame(() => onLayersUpdated());
       }
     }
-  }, [hex, layerState, layers, frameLayers, mapZoom]);
+  }, [hex, layerState, layers, frameLayers, mapZoom, routeRisk]);
 
   return <div className="map-canvas" ref={containerRef} />;
 }
@@ -161,6 +165,7 @@ function buildOverlayLayers({
   riskCells,
   outlineCells,
   layerMap,
+  routeRisk,
   zoom
 }: {
   map: maplibregl.Map;
@@ -170,6 +175,7 @@ function buildOverlayLayers({
   riskCells: MapHexResponse["cells"];
   outlineCells: H3OutlineCell[];
   layerMap: Map<string, LayerDefinition>;
+  routeRisk: RouteRiskResponse | null;
   zoom: number;
 }) {
   const deckLayers: Array<GeoJsonLayer | IconLayer<PointMarker>> = [];
@@ -199,6 +205,108 @@ function buildOverlayLayers({
         getLineWidth: getDynamicHexOutlineWidth(zoom, isHexOutlineVisible),
         lineWidthUnits: "pixels",
         onClick: (info: PickingInfo) => showPopup(map, info)
+      })
+    );
+  }
+
+  if (routeRisk) {
+    deckLayers.push(
+      new GeoJsonLayer({
+        id: "route-base-line-deck",
+        data: {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              id: "route-base-line",
+              geometry: routeRisk.route.geometry,
+              properties: {
+                label: `${routeRisk.origin.address} -> ${routeRisk.destination.address}`,
+                risk_summary: routeRisk.summary.risk_summary,
+                risk_score: routeRisk.summary.risk_score,
+                recommended_action: routeRisk.summary.recommended_action
+              }
+            }
+          ]
+        },
+        pickable: true,
+        stroked: true,
+        filled: false,
+        getLineColor: [15, 23, 42, 180],
+        getLineWidth: 5,
+        lineWidthUnits: "pixels",
+        lineWidthMinPixels: 3,
+        onClick: (info: PickingInfo) => showPopup(map, info)
+      }),
+      new GeoJsonLayer({
+        id: "route-risk-segments-deck",
+        data: {
+          type: "FeatureCollection",
+          features: routeRisk.segments.map((segment) => ({
+            type: "Feature",
+            id: segment.id,
+            geometry: segment.geometry,
+            properties: {
+              label: `Atkarpa ${segment.id.replace("route-segment-", "#")}`,
+              risk_score: segment.risk_score,
+              risk_level: segment.risk_level,
+              risk_summary: segment.risk_summary,
+              recommended_action: segment.recommended_action,
+              signal_count: segment.signal_count,
+              red_signal_count: segment.red_signal_count,
+              yellow_signal_count: segment.yellow_signal_count,
+              confidence_multiplier: segment.confidence_multiplier,
+              distance_m: segment.distance_m,
+              duration_s: segment.duration_s
+            }
+          }))
+        },
+        pickable: true,
+        stroked: true,
+        filled: false,
+        getLineColor: (feature: { properties?: Record<string, unknown> }) =>
+          toRgba(
+            riskColor(
+              deriveRiskLevelFromScore(Number(feature.properties?.risk_score ?? 0))
+            ),
+            0.95
+          ),
+        getLineWidth: 8,
+        lineWidthUnits: "pixels",
+        lineWidthMinPixels: 4,
+        onClick: (info: PickingInfo) => showPopup(map, info)
+      }),
+      new IconLayer<PointMarker>({
+        id: "route-endpoints-icon",
+        data: [
+          {
+            id: "route-origin-marker",
+            coordinates: routeRisk.origin.coordinates,
+            properties: {
+              label: "Pradzia",
+              risk_summary: routeRisk.origin.address
+            },
+            icon: ROUTE_START_ICON
+          },
+          {
+            id: "route-destination-marker",
+            coordinates: routeRisk.destination.coordinates,
+            properties: {
+              label: "Tikslas",
+              risk_summary: routeRisk.destination.address
+            },
+            icon: ROUTE_END_ICON
+          }
+        ],
+        pickable: true,
+        billboard: true,
+        sizeUnits: "pixels",
+        sizeMinPixels: 18,
+        sizeMaxPixels: 64,
+        getPosition: (item) => item.coordinates,
+        getIcon: (item) => item.icon,
+        getSize: () => 28,
+        onClick: (info: PickingInfo<PointMarker>) => showPopup(map, info)
       })
     );
   }
@@ -377,6 +485,20 @@ const ROAD_WEATHER_ICON = {
   anchorY: 96
 };
 
+const ROUTE_START_ICON = {
+  url: makeSvgIcon("#0f766e", "S"),
+  width: 96,
+  height: 96,
+  anchorY: 96
+};
+
+const ROUTE_END_ICON = {
+  url: makeSvgIcon("#b91c1c", "E"),
+  width: 96,
+  height: 96,
+  anchorY: 96
+};
+
 function toPointMarkers(frameLayer: FrameLayerData): PointMarker[] {
   return frameLayer.feature_collection.features
     .map((feature) => {
@@ -496,6 +618,8 @@ function showPopup(map: maplibregl.Map, info: PickingInfo) {
   const redSignalCount = Number(properties.red_signal_count ?? NaN);
   const yellowSignalCount = Number(properties.yellow_signal_count ?? NaN);
   const confidence = Number(properties.confidence_multiplier ?? NaN);
+  const distanceM = Number(properties.distance_m ?? NaN);
+  const durationS = Number(properties.duration_s ?? NaN);
   const confidenceLabel =
     Number.isFinite(confidence) && signalCount > 0
       ? confidence < 1
@@ -506,11 +630,15 @@ function showPopup(map: maplibregl.Map, info: PickingInfo) {
     properties.risk_score !== undefined
       ? `Risk score: ${properties.risk_score}`
       : "";
+  const travelMeta =
+    Number.isFinite(distanceM) || Number.isFinite(durationS)
+      ? `${Number.isFinite(distanceM) ? `Distance: ${distanceM >= 1000 ? `${(distanceM / 1000).toFixed(1)} km` : `${Math.round(distanceM)} m`}` : ""}${Number.isFinite(distanceM) && Number.isFinite(durationS) ? " | " : ""}${Number.isFinite(durationS) ? `Duration: ${Math.max(1, Math.round(durationS / 60))} min` : ""}`
+      : "";
   const signalMeta =
     Number.isFinite(signalCount) && signalCount > 0
       ? `Signals: ${signalCount} | Red: ${Number.isFinite(redSignalCount) ? redSignalCount : 0} | Yellow: ${Number.isFinite(yellowSignalCount) ? yellowSignalCount : 0}`
       : "";
-  const meta = [scoreMeta, signalMeta, confidenceLabel].filter(Boolean).join("<br/>");
+  const meta = [scoreMeta, travelMeta, signalMeta, confidenceLabel].filter(Boolean).join("<br/>");
 
   new maplibregl.Popup({ offset: 12 })
     .setLngLat([info.coordinate[0], info.coordinate[1]])

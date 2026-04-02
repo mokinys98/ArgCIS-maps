@@ -9,6 +9,7 @@ import {
 } from "./http";
 import { formatErrorMessage, safeStringify, serializeError } from "./logging";
 import { ArgcisRepository } from "./repository";
+import { getRouteRisk, RoutePlanningError } from "./route-risk";
 
 async function handleRequest(request: Request, env: Env): Promise<Response> {
   const config = getConfig(env);
@@ -90,6 +91,30 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return jsonResponse(
         config,
         await repository.getRiskByCoordinate(coordinates.latitude, coordinates.longitude),
+        200,
+        requestOrigin
+      );
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/route/risk") {
+      const body = await readJson<{
+        from_address?: string;
+        to_address?: string;
+        time?: string;
+      }>(request);
+
+      return jsonResponse(
+        config,
+        await getRouteRisk(
+          config,
+          repository,
+          {
+            from_address: body.from_address ?? "",
+            to_address: body.to_address ?? "",
+            time: resolveRequestTime(body.time ?? null)
+          },
+          fetch
+        ),
         200,
         requestOrigin
       );
@@ -255,6 +280,17 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       requestOrigin
     );
   } catch (error) {
+    if (error instanceof RoutePlanningError) {
+      return jsonResponse(
+        config,
+        {
+          error: error.message
+        },
+        error.status,
+        requestOrigin
+      );
+    }
+
     const details = serializeError(error, { includeStack: true });
     const message = formatErrorMessage(error);
 
@@ -388,6 +424,21 @@ function buildApiIndex(url: URL, config: ReturnType<typeof getConfig>) {
         lng: "Optional longitude, defaults to Vilnius"
       },
       example: `${baseUrl}/api/risk/coordinate?lat=54.6872&lng=25.2797`
+    },
+    {
+      method: "POST",
+      path: "/api/route/risk",
+      summary: "Geocodes two addresses, returns a route and risk evaluation.",
+      body: {
+        from_address: "Required origin address",
+        to_address: "Required destination address",
+        time: "Required ISO datetime"
+      },
+      body_example: {
+        from_address: "Vilnius, Lithuania",
+        to_address: "Kaunas, Lithuania",
+        time: "2026-04-01T09:00:00.000Z"
+      }
     },
     {
       method: "GET",
@@ -545,6 +596,7 @@ function getAllowedMethods(pathname: string): string[] {
     "/api/map/frame": ["GET"],
     "/api/map/hex": ["GET"],
     "/api/risk/coordinate": ["GET"],
+    "/api/route/risk": ["POST"],
     "/api/internal/debug/forecast": ["GET"],
     "/api/exercises": ["GET", "POST"],
     "/api/exercise-activities": ["GET", "POST"],

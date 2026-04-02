@@ -10,6 +10,7 @@ export interface Env {
   H3_RESOLUTION?: string;
   METEO_SOURCE_VIEW?: string;
   ROAD_SOURCE_VIEW?: string;
+  MAPBOX_ACCESS_TOKEN?: string;
 }
 
 export interface AppConfig {
@@ -22,6 +23,7 @@ export interface AppConfig {
   h3Resolution: number;
   meteoSourceView: string;
   roadSourceView: string;
+  mapboxAccessToken: string;
 }
 
 export function getConfig(env: Env): AppConfig {
@@ -34,7 +36,8 @@ export function getConfig(env: Env): AppConfig {
     useDemoData: toBool(env.USE_DEMO_DATA, false),
     h3Resolution: Number.parseInt(env.H3_RESOLUTION ?? "6", 10),
     meteoSourceView: env.METEO_SOURCE_VIEW ?? "argcis_ingest_meteo_feed",
-    roadSourceView: env.ROAD_SOURCE_VIEW ?? "argcis_ingest_road_feed"
+    roadSourceView: env.ROAD_SOURCE_VIEW ?? "argcis_ingest_road_feed",
+    mapboxAccessToken: env.MAPBOX_ACCESS_TOKEN ?? ""
   };
 }
 
