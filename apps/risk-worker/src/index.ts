@@ -55,38 +55,33 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     }
 
     if (request.method === "GET" && url.pathname === "/api/map/frame") {
-      const time = url.searchParams.get("time")
-        ? normalizeRequestTime(url.searchParams.get("time")!)
-        : floorToHour(new Date());
+      const time = resolveRequestTime(url.searchParams.get("time"));
       const layers = parseLayerIds(url.searchParams.get("layers"));
       return jsonResponse(config, await repository.getFrame(time, layers), 200, requestOrigin);
     }
 
     if (request.method === "GET" && url.pathname === "/api/map/hex") {
-      const time = url.searchParams.get("time")
-        ? normalizeRequestTime(url.searchParams.get("time")!)
-        : floorToHour(new Date());
+      const time = resolveRequestTime(url.searchParams.get("time"));
       const bbox = parseBbox(url.searchParams.get("bbox"));
       return jsonResponse(config, await repository.getHex(time, bbox), 200, requestOrigin);
     }
 
     if (request.method === "GET" && url.pathname === "/api/risk/coordinate") {
-      const latitude = Number(url.searchParams.get("lat"));
-      const longitude = Number(
+      const coordinates = resolveCoordinateQuery(
+        url.searchParams.get("lat"),
         url.searchParams.get("lng") ?? url.searchParams.get("lon")
       );
 
       if (
-        !Number.isFinite(latitude) ||
-        !Number.isFinite(longitude) ||
-        latitude < -90 ||
-        latitude > 90 ||
-        longitude < -180 ||
-        longitude > 180
+        !coordinates ||
+        coordinates.latitude < -90 ||
+        coordinates.latitude > 90 ||
+        coordinates.longitude < -180 ||
+        coordinates.longitude > 180
       ) {
         return jsonResponse(
           config,
-          { error: "Valid query params lat and lng (or lon) are required." },
+          { error: "Query params lat and lng (or lon) must be valid coordinates." },
           400,
           requestOrigin
         );
@@ -94,16 +89,14 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
       return jsonResponse(
         config,
-        await repository.getRiskByCoordinate(latitude, longitude),
+        await repository.getRiskByCoordinate(coordinates.latitude, coordinates.longitude),
         200,
         requestOrigin
       );
     }
 
     if (request.method === "GET" && url.pathname === "/api/internal/debug/forecast") {
-      const time = url.searchParams.get("time")
-        ? normalizeRequestTime(url.searchParams.get("time")!)
-        : floorToHour(new Date());
+      const time = resolveRequestTime(url.searchParams.get("time"));
       return jsonResponse(
         config,
         await repository.debugForecastTime(time),
@@ -142,9 +135,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     }
 
     if (request.method === "GET" && url.pathname === "/api/exercise-activities") {
-      const time = url.searchParams.get("time")
-        ? normalizeRequestTime(url.searchParams.get("time")!)
-        : floorToHour(new Date());
+      const time = resolveRequestTime(url.searchParams.get("time"));
       return jsonResponse(
         config,
         await repository.listExerciseActivities(time),
@@ -204,9 +195,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     }
 
     if (request.method === "POST" && url.pathname === "/api/internal/recompute") {
-      const recomputeTime = url.searchParams.get("time")
-        ? normalizeRequestTime(url.searchParams.get("time")!)
-        : floorToHour(new Date());
+      const recomputeTime = resolveRequestTime(url.searchParams.get("time"));
       console.info(
         `[api.internal.recompute] ${safeStringify({
           method: request.method,
@@ -224,9 +213,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     }
 
     if (request.method === "GET" && url.pathname === "/api/internal/recompute/table") {
-      const recomputeTime = url.searchParams.get("time")
-        ? normalizeRequestTime(url.searchParams.get("time")!)
-        : floorToHour(new Date());
+      const recomputeTime = resolveRequestTime(url.searchParams.get("time"));
       console.info(
         `[api.internal.recompute.table] ${safeStringify({
           method: request.method,
@@ -305,8 +292,230 @@ function normalizeRequestTime(input: string): string {
   return parsed.toISOString();
 }
 
+function resolveRequestTime(input: string | null): string {
+  if (!input?.trim()) {
+    return new Date().toISOString();
+  }
+
+  return normalizeRequestTime(input);
+}
+
+function resolveCoordinateQuery(
+  latitudeInput: string | null,
+  longitudeInput: string | null
+): { latitude: number; longitude: number } | null {
+  const defaultLatitude = 54.6872;
+  const defaultLongitude = 25.2797;
+  const latitude = parseCoordinateValue(latitudeInput, defaultLatitude);
+  const longitude = parseCoordinateValue(longitudeInput, defaultLongitude);
+
+  if (latitude === null || longitude === null) {
+    return null;
+  }
+
+  return {
+    latitude,
+    longitude
+  };
+}
+
+function parseCoordinateValue(input: string | null, fallback: number): number | null {
+  if (!input?.trim()) {
+    return fallback;
+  }
+
+  const value = Number(input);
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  return value;
+}
+
 function buildApiIndex(url: URL, config: ReturnType<typeof getConfig>) {
   const baseUrl = url.origin;
+  const methodPriority: Record<string, number> = {
+    GET: 0,
+    POST: 1
+  };
+
+  const endpoints = [
+    {
+      method: "GET",
+      path: "/health",
+      summary: "Worker health status.",
+      response_example: {
+        ok: true,
+        service: "argcis-risk-worker"
+      }
+    },
+    {
+      method: "GET",
+      path: "/api",
+      summary: "API index with usage instructions."
+    },
+    {
+      method: "GET",
+      path: "/api/map/layers",
+      summary: "Returns available map layers."
+    },
+    {
+      method: "GET",
+      path: "/api/map/frame",
+        summary: "Returns map frame data for a specific forecast time.",
+        query: {
+          time: "ISO datetime, optional, defaults to current time",
+          layers: "Comma-separated layer ids, optional"
+        },
+      example: `${baseUrl}/api/map/frame?time=2026-04-01T09:00:00.000Z&layers=meteo_risk,road_risk`
+    },
+    {
+      method: "GET",
+      path: "/api/map/hex",
+        summary: "Returns H3 hex risk cells.",
+        query: {
+          time: "ISO datetime, optional, defaults to current time",
+          bbox: "west,south,east,north, optional"
+        },
+      example: `${baseUrl}/api/map/hex?time=2026-04-01T09:00:00.000Z&bbox=20,54,27,57`
+    },
+    {
+      method: "GET",
+      path: "/api/risk/coordinate",
+      summary: "Returns risk timeline for one coordinate.",
+      query: {
+        lat: "Optional latitude, defaults to Vilnius",
+        lng: "Optional longitude, defaults to Vilnius"
+      },
+      example: `${baseUrl}/api/risk/coordinate?lat=54.6872&lng=25.2797`
+    },
+    {
+      method: "GET",
+      path: "/api/exercises",
+      summary: "Lists exercises."
+    },
+    {
+      method: "POST",
+      path: "/api/exercises",
+      summary: "Creates an exercise.",
+      body: {
+        name: "Required string",
+        description: "Optional string",
+        starts_at: "Optional ISO datetime",
+        ends_at: "Optional ISO datetime",
+        geometry_name: "Optional string",
+        geometry: "Optional GeoJSON geometry"
+      },
+      body_example: {
+        name: "Spring exercise",
+        description: "Scenario for risk simulation",
+        starts_at: "2026-04-01T09:00:00.000Z",
+        ends_at: "2026-04-01T15:00:00.000Z",
+        geometry_name: "Vilnius area",
+        geometry: {
+          type: "Point",
+          coordinates: [25.2797, 54.6872]
+        }
+      }
+    },
+    {
+      method: "GET",
+      path: "/api/exercise-activities",
+      summary: "Lists exercise activities for a time.",
+      query: {
+        time: "ISO datetime, optional, defaults to current time"
+      }
+    },
+    {
+      method: "POST",
+      path: "/api/exercise-activities",
+      summary: "Creates an exercise activity.",
+      body: {
+        scenario_id: "Required exercise id",
+        geometry_id: "Optional geometry id",
+        name: "Required string",
+        activity_type: "Required string",
+        starts_at: "Required ISO datetime",
+        ends_at: "Required ISO datetime"
+      },
+      body_example: {
+        scenario_id: "exercise-id",
+        geometry_id: "geometry-id",
+        name: "Evacuation stage",
+        activity_type: "evacuation",
+        starts_at: "2026-04-01T10:00:00.000Z",
+        ends_at: "2026-04-01T12:00:00.000Z"
+      }
+    },
+    {
+      method: "GET",
+      path: "/api/saved-maps",
+      summary: "Lists saved maps for the current user."
+    },
+    {
+      method: "POST",
+      path: "/api/saved-maps",
+      summary: "Creates a saved map.",
+      body: {
+        name: "Required string",
+        description: "Optional string",
+        active_time_utc: "Optional ISO datetime",
+        layers: "Required array of layer configurations"
+      },
+      body_example: {
+        name: "Morning risk view",
+        description: "Saved layer set",
+        active_time_utc: "2026-04-01T09:00:00.000Z",
+        layers: [
+          {
+            layer_id: "meteo_risk",
+            ordering: 0,
+            visible: true,
+            opacity: 0.9,
+            filters: {},
+            active_time_utc: "2026-04-01T09:00:00.000Z"
+          }
+        ]
+      }
+    },
+    {
+      method: "GET",
+      path: "/api/internal/debug/forecast",
+      summary: "Debug forecast time resolution.",
+      query: {
+        time: "ISO datetime, optional, defaults to current time"
+      },
+      internal: true
+    },
+    {
+      method: "POST",
+      path: "/api/internal/recompute",
+      summary: "Recomputes risk data for a specific hour.",
+      query: {
+        time: "ISO datetime, optional, defaults to current time"
+      },
+      internal: true
+    },
+    {
+      method: "GET",
+      path: "/api/internal/recompute/table",
+      summary: "Returns the data table that recompute would use for a specific time.",
+      query: {
+        time: "ISO datetime, optional, defaults to current time"
+      },
+      internal: true
+    }
+  ].sort((left, right) => {
+    const methodOrder =
+      (methodPriority[left.method] ?? Number.MAX_SAFE_INTEGER) -
+      (methodPriority[right.method] ?? Number.MAX_SAFE_INTEGER);
+
+    if (methodOrder !== 0) {
+      return methodOrder;
+    }
+
+    return left.path.localeCompare(right.path);
+  });
 
   return {
     service: "argcis-risk-worker",
@@ -323,173 +532,7 @@ function buildApiIndex(url: URL, config: ReturnType<typeof getConfig>) {
         ? "Anonymous requests are currently allowed."
         : "Bearer token is required for API requests."
     },
-    endpoints: [
-      {
-        method: "GET",
-        path: "/health",
-        summary: "Worker health status.",
-        response_example: {
-          ok: true,
-          service: "argcis-risk-worker"
-        }
-      },
-      {
-        method: "GET",
-        path: "/api",
-        summary: "API index with usage instructions."
-      },
-      {
-        method: "GET",
-        path: "/api/map/layers",
-        summary: "Returns available map layers."
-      },
-      {
-        method: "GET",
-        path: "/api/map/frame",
-        summary: "Returns map frame data for a specific forecast time.",
-        query: {
-          time: "ISO datetime, optional",
-          layers: "Comma-separated layer ids, optional"
-        },
-        example: `${baseUrl}/api/map/frame?time=2026-04-01T09:00:00.000Z&layers=meteo_risk,road_risk`
-      },
-      {
-        method: "GET",
-        path: "/api/map/hex",
-        summary: "Returns H3 hex risk cells.",
-        query: {
-          time: "ISO datetime, optional",
-          bbox: "west,south,east,north, optional"
-        },
-        example: `${baseUrl}/api/map/hex?time=2026-04-01T09:00:00.000Z&bbox=20,54,27,57`
-      },
-      {
-        method: "GET",
-        path: "/api/risk/coordinate",
-        summary: "Returns risk timeline for one coordinate.",
-        query: {
-          lat: "Required latitude",
-          lng: "Required longitude"
-        },
-        example: `${baseUrl}/api/risk/coordinate?lat=54.6872&lng=25.2797`
-      },
-      {
-        method: "GET",
-        path: "/api/exercises",
-        summary: "Lists exercises."
-      },
-      {
-        method: "POST",
-        path: "/api/exercises",
-        summary: "Creates an exercise.",
-        body: {
-          name: "Required string",
-          description: "Optional string",
-          starts_at: "Optional ISO datetime",
-          ends_at: "Optional ISO datetime",
-          geometry_name: "Optional string",
-          geometry: "Optional GeoJSON geometry"
-        },
-        body_example: {
-          name: "Spring exercise",
-          description: "Scenario for risk simulation",
-          starts_at: "2026-04-01T09:00:00.000Z",
-          ends_at: "2026-04-01T15:00:00.000Z",
-          geometry_name: "Vilnius area",
-          geometry: {
-            type: "Point",
-            coordinates: [25.2797, 54.6872]
-          }
-        }
-      },
-      {
-        method: "GET",
-        path: "/api/exercise-activities",
-        summary: "Lists exercise activities for a time.",
-        query: {
-          time: "ISO datetime, optional"
-        }
-      },
-      {
-        method: "POST",
-        path: "/api/exercise-activities",
-        summary: "Creates an exercise activity.",
-        body: {
-          scenario_id: "Required exercise id",
-          geometry_id: "Optional geometry id",
-          name: "Required string",
-          activity_type: "Required string",
-          starts_at: "Required ISO datetime",
-          ends_at: "Required ISO datetime"
-        },
-        body_example: {
-          scenario_id: "exercise-id",
-          geometry_id: "geometry-id",
-          name: "Evacuation stage",
-          activity_type: "evacuation",
-          starts_at: "2026-04-01T10:00:00.000Z",
-          ends_at: "2026-04-01T12:00:00.000Z"
-        }
-      },
-      {
-        method: "GET",
-        path: "/api/saved-maps",
-        summary: "Lists saved maps for the current user."
-      },
-      {
-        method: "POST",
-        path: "/api/saved-maps",
-        summary: "Creates a saved map.",
-        body: {
-          name: "Required string",
-          description: "Optional string",
-          active_time_utc: "Optional ISO datetime",
-          layers: "Required array of layer configurations"
-        },
-        body_example: {
-          name: "Morning risk view",
-          description: "Saved layer set",
-          active_time_utc: "2026-04-01T09:00:00.000Z",
-          layers: [
-            {
-              layer_id: "meteo_risk",
-              ordering: 0,
-              visible: true,
-              opacity: 0.9,
-              filters: {},
-              active_time_utc: "2026-04-01T09:00:00.000Z"
-            }
-          ]
-        }
-      },
-      {
-        method: "GET",
-        path: "/api/internal/debug/forecast",
-        summary: "Debug forecast time resolution.",
-        query: {
-          time: "ISO datetime, optional"
-        },
-        internal: true
-      },
-      {
-        method: "POST",
-        path: "/api/internal/recompute",
-        summary: "Recomputes risk data for a specific hour.",
-        query: {
-          time: "ISO datetime, optional"
-        },
-        internal: true
-      },
-      {
-        method: "GET",
-        path: "/api/internal/recompute/table",
-        summary: "Returns the data table that recompute would use for a specific time.",
-        query: {
-          time: "ISO datetime, optional"
-        },
-        internal: true
-      }
-    ]
+    endpoints
   };
 }
 

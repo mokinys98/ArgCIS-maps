@@ -295,7 +295,7 @@ function buildOverlayLayers({
         radiusUnits: "pixels",
         radiusMinPixels: 4,
         radiusMaxPixels: 22,
-        getLineWidth: 2,
+        getLineWidth: 0,
         lineWidthUnits: "pixels",
         getFillColor: (feature: { properties?: Record<string, unknown> }) =>
           chooseFillColor(layer.id, feature, layerMap),
@@ -345,9 +345,9 @@ function getDynamicIconSize(layerId: string, zoom: number): number {
 
 function getDynamicHexOutlineWidth(zoom: number, isGridOutline: boolean): number {
   const clampedZoom = Math.max(4, Math.min(13, zoom));
-  const baseWidth = isGridOutline ? 2.6 : 1.2;
-  const zoomInBoost = Math.max(0, clampedZoom - 7) * (isGridOutline ? 0.4 : 0.18);
-  const zoomOutBoost = Math.max(0, 7 - clampedZoom) * (isGridOutline ? 0.2 : 0.08);
+  const baseWidth = isGridOutline ? 1.4 : 0;
+  const zoomInBoost = Math.max(0, clampedZoom - 7) * (isGridOutline ? 0.22 : 0.18);
+  const zoomOutBoost = Math.max(0, 7 - clampedZoom) * (isGridOutline ? 0.12 : 0.08);
   return baseWidth + zoomInBoost + zoomOutBoost;
 }
 

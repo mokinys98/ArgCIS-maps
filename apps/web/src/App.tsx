@@ -20,7 +20,6 @@ import {
   useState,
   useDeferredValue
 } from "react";
-import { ActivityPanel } from "./components/ActivityPanel";
 import { LayerPanel, type LayerState } from "./components/LayerPanel";
 import { LoginScreen } from "./components/LoginScreen";
 import { MapCanvas } from "./components/MapCanvas";
@@ -344,8 +343,6 @@ export default function App() {
           onSavePreset={savePreset}
           onApplySavedMap={applySavedMap}
         />
-
-        <ActivityPanel scenarios={scenarios} activities={activities} />
       </aside>
 
       <main className="workspace">

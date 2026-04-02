@@ -18,13 +18,20 @@ interface LayerPanelProps {
 export function LayerPanel({
   layers,
   layerState,
-  savedMaps,
-  draftName,
-  onDraftNameChange,
+  savedMaps: _savedMaps,
+  draftName: _draftName,
+  onDraftNameChange: _onDraftNameChange,
   onToggle,
-  onSavePreset,
-  onApplySavedMap
+  onSavePreset: _onSavePreset,
+  onApplySavedMap: _onApplySavedMap
 }: LayerPanelProps) {
+  const visibleLayers = layers.filter(
+    (layer) =>
+      layer.id !== "road-alerts" &&
+      layer.id !== "exercise-areas" &&
+      layer.id !== "activity-risk"
+  );
+
   return (
     <section className="panel">
       <div className="panel-head">
@@ -35,7 +42,7 @@ export function LayerPanel({
       </div>
 
       <div className="layer-list">
-        {layers.map((layer) => {
+        {visibleLayers.map((layer) => {
           const current = layerState[layer.id];
           return (
             <article className="layer-card" key={layer.id}>
@@ -53,33 +60,6 @@ export function LayerPanel({
             </article>
           );
         })}
-      </div>
-
-      <div className="preset-block">
-        <div className="preset-form">
-          <input
-            value={draftName}
-            onChange={(event) => onDraftNameChange(event.target.value)}
-            placeholder="Pavadinkite preset'a"
-          />
-          <button onClick={onSavePreset} type="button">
-            Issaugoti
-          </button>
-        </div>
-
-        <div className="saved-list">
-          {savedMaps.map((savedMap) => (
-            <button
-              className="saved-item"
-              key={savedMap.id}
-              onClick={() => onApplySavedMap(savedMap)}
-              type="button"
-            >
-              <strong>{savedMap.name}</strong>
-              <small>{savedMap.description ?? "Be apraso"}</small>
-            </button>
-          ))}
-        </div>
       </div>
     </section>
   );
